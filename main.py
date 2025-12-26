@@ -487,6 +487,11 @@ async def main():
     
         pygame.display.update()
         clock.tick(30)
+        screen = pygame.display.set_mode(
+            (SCREEN_WIDTH, SCREEN_HEIGHT),
+            pygame.SCALED
+        )
+        
 asyncio.run(main())
 
 
