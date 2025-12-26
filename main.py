@@ -4,7 +4,11 @@ import asyncio
 pygame.init()
 SCREEN_WIDTH = 1000
 SCREEN_HEIGHT = 500
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+screen = pygame.display.set_mode(
+    (SCREEN_WIDTH, SCREEN_HEIGHT),
+    pygame.SCALED
+)
+
 clock = pygame.time.Clock()
 
 pygame.font.init()
@@ -23,22 +27,24 @@ game_mode = "multi" # lub "single"
 p1_choice = "Soldier"
 p2_choice = "Orc"
 # --- FUNKCJA RYSUJĄCA PRZYCISK ---
-def draw_button(text, x, y, width, height, active_color, inactive_color):
+def draw_button(text, x, y, width, height, active_color, inactive_color, events):
     mouse = pygame.mouse.get_pos()
-    click = pygame.mouse.get_pressed(num_buttons=3)
-
-    
     rect = pygame.Rect(x, y, width, height)
     is_hovered = rect.collidepoint(mouse)
-    
+
     color = active_color if is_hovered else inactive_color
     pygame.draw.rect(screen, color, rect, border_radius=10)
-    
+
     text_surf = font_sub.render(text, True, (255, 255, 255))
     text_rect = text_surf.get_rect(center=rect.center)
     screen.blit(text_surf, text_rect)
-    
-    return is_hovered and click[0]
+
+    for event in events:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if is_hovered:
+                return True
+    return False
+
 # --- KLASA POCISKU ---
 class Arrow(pygame.sprite.Sprite):
     def __init__(self, x, y, direction, owner): # Dodajemy owner
@@ -379,11 +385,12 @@ async def main():
     run = True
 
     while run:
-        screen.fill((30, 30, 30))
+        events = pygame.event.get()
         pygame.event.pump()
+        screen.fill((30, 30, 30))
+
 
         # --- EVENTS ---
-        events = pygame.event.get()
         for event in events:
             if event.type == pygame.QUIT:
                 run = False
@@ -398,23 +405,27 @@ async def main():
                         p2_char_index = (p2_char_index - 1) % len(available_chars)
                     if event.key == pygame.K_RIGHT:
                         p2_char_index = (p2_char_index + 1) % len(available_chars)
-
+            
         # --- STAN: MENU GŁÓWNE ---
         if game_state == STATE_MENU:
             title = font_main.render("FANTASY FIGHTER", True, (255, 215, 0))
             screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 50))
             
-            if draw_button("SINGLE PLAYER", 400, 180, 200, 50, (100, 100, 100), (50, 50, 50)):
+            if draw_button("SINGLE PLAYER", 400, 180, 200, 50,
+                           (100, 100, 100), (50, 50, 50), events):
                 game_mode = "single"
                 game_state = STATE_CHAR_SELECT
                 pygame.time.wait(200)
+            
         
-            if draw_button("MULTI PLAYER", 400, 260, 200, 50, (100, 100, 100), (50, 50, 50)):
+            if draw_button("MULTI PLAYER", 400, 260, 200, 50,
+                           (100, 100, 100), (50, 50, 50), events):                           
                 game_mode = "multi"
                 game_state = STATE_CHAR_SELECT
                 pygame.time.wait(200)
         
-            if draw_button("QUIT", 400, 340, 200, 50, (150, 50, 50), (100, 0, 0)):
+            if draw_button("QUIT", 400, 340, 200, 50,
+                           (100, 100, 100), (50, 50, 50), events):                           
                 run = False
         
             # --- STAN: WYBÓR POSTACI ---
@@ -446,7 +457,8 @@ async def main():
             screen.blit(p1_txt, (150, 350))
             screen.blit(p2_txt, (600, 350))
     
-            if draw_button("BATTLE!", 400, 420, 200, 50, (0, 200, 0), (0, 100, 0)):
+            if draw_button("BATTLE!", 400, 420, 200, 50,
+                           (100, 100, 100), (50, 50, 50), events):                           
                 def create_char(name, x, y):
                     return Soldier(x, y) if name == "Soldier" else Orc(x, y)
                 player1 = create_char(p1_name, 100, 250)
@@ -481,16 +493,14 @@ async def main():
                 win_txt = font_main.render(f"{winner} WINS!", True, (255, 255, 255))
                 screen.blit(win_txt, (SCREEN_WIDTH//2 - win_txt.get_width()//2, 120))
                 
-                if draw_button("BACK TO MENU", 400, 220, 200, 50, (100, 100, 100), (50, 50, 50)):
+                if draw_button("BACK TO MENU", 400, 220, 200, 50,
+                           (100, 100, 100), (50, 50, 50), events):                               
                     game_state = STATE_MENU
                     pygame.time.wait(200)
     
         pygame.display.update()
         clock.tick(30)
-        screen = pygame.display.set_mode(
-            (SCREEN_WIDTH, SCREEN_HEIGHT),
-            pygame.SCALED
-        )
+
         
 asyncio.run(main())
 
