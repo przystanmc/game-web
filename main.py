@@ -25,7 +25,8 @@ p2_choice = "Orc"
 # --- FUNKCJA RYSUJĄCA PRZYCISK ---
 def draw_button(text, x, y, width, height, active_color, inactive_color):
     mouse = pygame.mouse.get_pos()
-    click = pygame.mouse.get_pressed()
+    click = pygame.mouse.get_pressed(num_buttons=3)
+
     
     rect = pygame.Rect(x, y, width, height)
     is_hovered = rect.collidepoint(mouse)
@@ -200,7 +201,7 @@ class Character(pygame.sprite.Sprite):
             if self.direction == 'right': attack_rect.left = self.hitbox.right
             else: attack_rect.right = self.hitbox.left
             attack_rect.centery = self.hitbox.centery
-            pygame.draw.rect(screen, (255, 255, 0), attack_rect, 1)
+
             if attack_rect.colliderect(target.hitbox) and target.hit_cooldown == 0:
                 target.take_damage(10)
                 target.hit_cooldown = 30
@@ -379,6 +380,7 @@ async def main():
 
     while run:
         screen.fill((30, 30, 30))
+        pygame.event.pump()
 
         # --- EVENTS ---
         events = pygame.event.get()
@@ -484,7 +486,8 @@ async def main():
                     pygame.time.wait(200)
     
         pygame.display.update()
-        clock.tick(60)
+        clock.tick(30)
 asyncio.run(main())
+
 
 
