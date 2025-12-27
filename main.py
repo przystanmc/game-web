@@ -100,7 +100,8 @@ class Character(pygame.sprite.Sprite):
         self.is_jumping = False
         self.ground_y = y
         self.image = pygame.Surface((100, 100)) # Placeholder, żeby gra nie wywaliła się przed pierwszym update
-
+        self.cpu_action_timer = 0
+        self.cpu_current_action = None
 
     def load_sheet(self, filename, frame_count, width, height):
         path = f"{self.folder}/{filename}"
@@ -124,16 +125,23 @@ class Character(pygame.sprite.Sprite):
         self.hitbox.centery = self.rect.centery - 5
         
     def take_damage(self, amount):
-        if not self.is_dead and not self.is_blocking:
-            self.current_hp -= amount
-            if self.current_hp <= 0:
-                self.current_hp = 0
-                self.is_dead = True
-                self.state = 'death'
-            else:
-                self.state = 'hit'
-            self.frame_index = 0
+        if self.is_dead:
+            return
+            
+        # Jeśli postać blokuje, całkowicie ignorujemy obrażenia
+        if self.is_blocking:
+            # Tutaj można dodać dźwięk parowania (opcjonalnie)
+            return 
 
+        self.current_hp -= amount
+        if self.current_hp <= 0:
+            self.current_hp = 0
+            self.is_dead = True
+            self.state = 'death'
+        else:
+            self.state = 'hit'
+        
+        self.frame_index = 0
     def draw_hp_bar(self, surface, x, y, align_right=False):
         bar_w, bar_h = 300, 25
         hp_w = int(bar_w * (self.current_hp / self.max_hp))
@@ -153,29 +161,31 @@ class Character(pygame.sprite.Sprite):
             # Zatrzymujemy na ostatniej klatce śmierci
             self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
         elif self.state == 'block' and self.is_blocking:
-            frames = self.animations['block']
-            # Zatrzymujemy na ostatniej klatce bloku
-            self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
+            if 'block' in self.animations:
+                frames = self.animations['block']
+                self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
+            else:
+                # Jeśli Soldier nie ma animacji bloku, używamy 'idle'
+                frames = self.animations['idle']
+                self.frame_index = (self.frame_index + 0.18) % len(frames)
         else:
+            # Domyślnie bierzemy stan, a jak go nie ma - idle
             frames = self.animations.get(self.state, self.animations['idle'])
             
-            # Prędkość animacji zależna od stanu
-            if self.state == 'jump':
-                anim_speed = 0.15
-            elif self.is_attacking or self.state == 'hit': # Dodano 'hit' dla szybkości
-                anim_speed = 0.25
-            else:
-                anim_speed = 0.18
-                
+            anim_speed = 0.25 if (self.is_attacking or self.state == 'hit') else 0.18
             self.frame_index += anim_speed
 
-            # 2. Zapętlanie lub powrót do IDLE
             if self.frame_index >= len(frames):
                 if self.is_attacking or self.state == 'hit':
                     self.is_attacking = False
-                    self.state = 'idle' # Reset stanu po ataku lub oberwaniu
+                    self.state = 'idle'
                 self.frame_index = 0 
 
+        # 2. Wyświetlenie klatki
+        self.image = frames[int(self.frame_index)]
+        
+        if self.direction == 'left':
+            self.image = pygame.transform.flip(self.image, True, False)
         # --- KLUCZOWE USTAWIENIE OBRAZU ---
         # Pobieramy klatkę z listy na podstawie zaokrąglonego indeksu
         self.image = frames[int(self.frame_index)]
@@ -223,6 +233,116 @@ class Character(pygame.sprite.Sprite):
                 self.direction = 'right'
             else:
                 self.direction = 'left'
+
+    def update_cpu(self, target, arrows_list):
+        if self.is_dead:
+            self.update_animation()
+            return
+
+        import random
+        dx = target.rect.centerx - self.rect.centerx
+        dy = target.rect.centery - self.rect.centery  # Dodano dy!
+        distance = abs(dx)
+        
+        cpu_keys = {'left': False, 'right': False, 'jump': False, 
+                    'atk1': False, 'atk2': False, 'special': False, 'block': False}
+
+        # --- REAKCJA NA STRZAŁY ---
+        for arrow in arrows_list:
+            if arrow.owner != self and abs(arrow.rect.centerx - self.rect.centerx) < 250:
+                if random.random() < 0.5: 
+                    cpu_keys['block'] = True
+                elif not self.is_jumping:
+                    cpu_keys['jump'] = True
+
+        # --- LOGIKA TIMERA ---
+        if self.cpu_action_timer > 0:
+            if self.cpu_current_action:
+                cpu_keys[self.cpu_current_action] = True
+            self.cpu_action_timer -= 1
+        else:
+            self.cpu_current_action = None
+
+            # --- RUCH I SKOKI ---
+            if not self.is_attacking:
+                # Szansa na podążanie w stronę gracza
+                if random.random() < 0.6: # 60% szans na reakcję ruchu w tej klatce
+                    if distance > 50:
+                        if dx > 0: cpu_keys['right'] = True
+                        else: cpu_keys['left'] = True
+                    elif distance < 30:
+                        if dx > 0: cpu_keys['left'] = True
+                        else: cpu_keys['right'] = True
+
+                # --- SKOK (Reakcja na gracza) ---
+                if not self.is_jumping:
+                    # Skocz, jeśli gracz jest wyżej lub gracz skacze (szansa 5%)
+                    if (dy < -30 or target.is_jumping) and random.random() < 0.05:
+                        cpu_keys['jump'] = True
+                    # Czysto losowy skok (szansa 0.5%)
+                    elif random.random() < 0.001:
+                        cpu_keys['jump'] = True
+
+            # --- WALKA ---
+            if not self.is_attacking and self.state != 'hit':
+                # Blokowanie gracza
+                if target.is_attacking and distance < 80:
+                    if random.random() < 0.7: cpu_keys['block'] = True
+
+                if not cpu_keys['block']:
+                    if distance <= 60:
+                        chance = random.random()
+                        if chance < 0.06: cpu_keys['atk1'] = True
+                        elif chance < 0.04: cpu_keys['atk2'] = True
+                    elif distance > 250 and random.random() < 0.01:
+                        cpu_keys['special'] = True
+                        self.cpu_action_timer = 50 # Blokada na czas animacji łuku
+                        self.cpu_current_action = 'special'
+
+        self.apply_cpu_controls(cpu_keys, target, arrows_list)
+    def apply_cpu_controls(self, keys, target, arrows_list):
+        # 1. Resetujemy flagi ataku, jeśli nie ma akcji (opcjonalnie, zależnie od logiki)
+        
+        # 2. Blokowanie (Tylko na ziemi i gdy nie atakuje)
+        self.is_blocking = keys['block'] and not self.is_jumping and not self.is_attacking
+        
+        if self.is_blocking:
+            self.state = 'block'
+            # Podczas bloku CPU się nie rusza
+        else:
+            # 3. Skok
+            if keys['jump'] and not self.is_jumping:
+                self.vel_y = self.jump_height
+                self.is_jumping = True
+                self.state = 'jump'
+                self.frame_index = 0
+    
+            # 4. Ruch
+            if keys['left']:
+                self.rect.x -= self.vel
+                self.direction = 'left'
+                if not self.is_jumping and not self.is_attacking: self.state = 'walk'
+            elif keys['right']:
+                self.rect.x += self.vel
+                self.direction = 'right'
+                if not self.is_jumping and not self.is_attacking: self.state = 'walk'
+
+            # 5. Ataki
+            if keys['atk1']: 
+                self.state = 'attack1'; self.is_attacking = True; self.frame_index = 0
+            elif keys['atk2']: 
+                self.state = 'attack2'; self.is_attacking = True; self.frame_index = 0
+            elif keys['special']:
+                 # Dodaj to sprawdzenie, żeby nie wywalało błędu u Orca
+                 if self.folder.endswith("Soldier"):
+                    self.state = 'bow'; self.is_attacking = True; self.frame_index = 0; self.arrow_shot = False
+        
+        # 6. Aktualizacje fizyki
+        self.apply_gravity()
+        self.update_hitbox()
+        self.check_attack_collision(target)
+        if self.hit_cooldown > 0: self.hit_cooldown -= 1
+        self.update_animation()
 # --- KLASY POSTACI ---
 class Soldier(Character):
     def __init__(self, x, y):
@@ -410,7 +530,7 @@ async def main():
                         elif menu_index == 2: 
                             game_state = STATE_SETTINGS
 
-                # 2. USTAWIENIA (BINDY) - TO TUTAJ MÓGŁ BYĆ PROBLEM
+                # 2. USTAWIENIA (BINDY)
                 elif game_state == STATE_SETTINGS:
                     if is_binding:
                         p_idx, label, action = bind_list[setting_selected_idx]
@@ -427,8 +547,12 @@ async def main():
                         elif event.key == pygame.K_ESCAPE:
                             game_state = STATE_MENU
 
-                # 3. WYBÓR POSTACI
+                # 3. WYBÓR POSTACI (DODANY ESC)
                 elif game_state == STATE_CHAR_SELECT:
+                    # To sprawia, że ESC wraca do menu
+                    if event.key == pygame.K_ESCAPE:
+                        game_state = STATE_MENU
+                        
                     if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 2
                     if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 2
                     if event.key == pygame.K_LEFT: p2_char_index = (p2_char_index - 1) % 2
@@ -443,10 +567,15 @@ async def main():
                         arrows = []
                         game_state = STATE_PLAYING
 
-                # 4. POWRÓT Z WALKI
+                # 4. POWRÓT Z WALKI (DODANY ESC)
                 elif game_state == STATE_PLAYING:
+                    if event.key == pygame.K_ESCAPE:
+                        game_state = STATE_MENU
                     if (player1.is_dead or player2.is_dead) and event.key == pygame.K_RETURN:
                         game_state = STATE_MENU
+
+
+
 
         # --- RENDEROWANIE ---
         if game_state == STATE_MENU:
@@ -458,14 +587,21 @@ async def main():
         elif game_state == STATE_CHAR_SELECT:
             label = font_sub.render("Wybór: [A/D] P1, [Strzałki] P2, [ENTER] Start", True, (255, 255, 255))
             screen.blit(label, (SCREEN_WIDTH // 2 - label.get_width()//2, 50))
+            
             p1_v = p1_pre_soldier if p1_char_index == 0 else p1_pre_orc
             p2_v = p2_pre_soldier if p2_char_index == 0 else p2_pre_orc
             p1_v.update_animation(); p2_v.update_animation()
+            
             screen.blit(p1_v.image, (200, 150)); screen.blit(p2_v.image, (650, 150))
+            
             p1_name = font_sub.render(f"P1: {available_chars[p1_char_index]}", True, (100, 100, 255))
             p2_name = font_sub.render(f"P2: {available_chars[p2_char_index]}", True, (255, 100, 100))
             screen.blit(p1_name, (220, 350)); screen.blit(p2_name, (670, 350))
-
+            
+            # Napis ESC na dole ekranu wyboru
+            hint = font_sub.render("ESC - Powrót", True, (150, 150, 150))
+            screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))   
+                                     
         elif game_state == STATE_SETTINGS:
             header = font_main.render("USTAWIENIA KLAWISZY", True, (255, 255, 255))
             screen.blit(header, (SCREEN_WIDTH//2 - header.get_width()//2, 30))
@@ -480,22 +616,39 @@ async def main():
                 if is_binding and i == setting_selected_idx:
                     text = f"{p_idx} {label}: <WCIŚNIJ KLAWISZ>"
                 draw_keyboard_button(text, 250, 100 + i * 45, 500, 35, i == setting_selected_idx)
-            # Dodatkowa informacja na dole
+            
             hint = font_sub.render("ESC - Powrót", True, (150, 150, 150))
             screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))
 
         elif game_state == STATE_PLAYING:
-            player1.face_target(player2); player2.face_target(player1)
+            # 1. Logika orientacji (patrzenie na siebie)
+            player1.face_target(player2)
+            player2.face_target(player1)
+            
+            # 2. Aktualizacja Gracza 1 (zawsze klawiatura)
             player1.update(player2, arrows, P1_CONTROLS)
-            player2.update(player1, arrows, P2_CONTROLS)
-            player1.screen_wrap(); player2.screen_wrap()
+            
+            # 3. Aktualizacja Gracza 2 (CPU lub Klawiatura)
+            if game_mode == "single":
+                player2.update_cpu(player1, arrows)
+            else:
+                player2.update(player1, arrows, P2_CONTROLS)
+            
+            # 4. Pozostała logika (pociski, granice ekranu)
+            player1.screen_wrap()
+            player2.screen_wrap()
+            
             for a in arrows[:]:
                 a.update(player1, player2, arrows)
                 screen.blit(a.image, a.rect)
+                
+            # 5. Rysowanie HP i postaci
             player1.draw_hp_bar(screen, 20, 20)
             player2.draw_hp_bar(screen, SCREEN_WIDTH - 20, 20, align_right=True)
             screen.blit(player1.image, player1.rect)
             screen.blit(player2.image, player2.rect)
+            
+            # 6. Ekran wygranej
             if player1.is_dead or player2.is_dead:
                 win_text = "PLAYER 1 Wygrał!" if player2.is_dead else "PLAYER 2 Wygrał!"
                 txt = font_main.render(win_text, True, (255, 255, 255))
@@ -504,8 +657,8 @@ async def main():
                 screen.blit(sub, (SCREEN_WIDTH//2 - sub.get_width()//2, 280))
 
         pygame.display.flip()
-        clock.tick(60) # Standardowe 60 FPS dla web
-        await asyncio.sleep(0) # Kluczowe dla pygbag!
+        clock.tick(60)
+        await asyncio.sleep(0)
 
 # Start
 asyncio.run(main())
