@@ -22,9 +22,11 @@ STATE_MENU = "menu"
 STATE_CHAR_SELECT = "char_select"
 STATE_PLAYING = "playing"
 game_state = STATE_MENU
-
+STATE_SETTINGS = "settings"
+setting_selected_idx = 0  # Który klawisz z listy zmieniamy
+is_binding = False        # Czy czekamy na wciśnięcie klawisza
 # Wybory i nawigacja menu
-menu_options = ["SINGLE PLAYER", "MULTI PLAYER", "QUIT"]
+menu_options = ["Jeden Gracz", "Dwóch Graczy", "USTAWIENIA"]
 menu_index = 0
 game_mode = "multi"
 available_chars = ["Soldier", "Orc"]
@@ -114,7 +116,7 @@ class Character(pygame.sprite.Sprite):
         except Exception as e:
             print(f"Brak pliku: {path}")
             surf = pygame.Surface((50, 50))
-            surf.fill((200, 0, 0))
+            surf.fill((100, 0, 0))
             return [surf] * frame_count
 
     def update_hitbox(self):
@@ -145,29 +147,43 @@ class Character(pygame.sprite.Sprite):
             pygame.draw.rect(surface, (255, 255, 255), (x, y, bar_w, bar_h), 2)
 
     def update_animation(self):
+        # 1. Wybór odpowiedniej listy klatek (frames)
         if self.is_dead:
             frames = self.animations['death']
+            # Zatrzymujemy na ostatniej klatce śmierci
             self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
         elif self.state == 'block' and self.is_blocking:
             frames = self.animations['block']
+            # Zatrzymujemy na ostatniej klatce bloku
             self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
         else:
             frames = self.animations.get(self.state, self.animations['idle'])
-            anim_speed = 0.25 if (self.is_attacking or self.state == 'hit') else 0.18
-            self.frame_index += anim_speed
             
+            # Prędkość animacji zależna od stanu
+            if self.state == 'jump':
+                anim_speed = 0.15
+            elif self.is_attacking or self.state == 'hit': # Dodano 'hit' dla szybkości
+                anim_speed = 0.25
+            else:
+                anim_speed = 0.18
+                
+            self.frame_index += anim_speed
+
+            # 2. Zapętlanie lub powrót do IDLE
             if self.frame_index >= len(frames):
                 if self.is_attacking or self.state == 'hit':
                     self.is_attacking = False
-                    self.state = 'idle'
+                    self.state = 'idle' # Reset stanu po ataku lub oberwaniu
                 self.frame_index = 0 
-        
-        # --- TA LINIA JEST KLUCZOWA ---
+
+        # --- KLUCZOWE USTAWIENIE OBRAZU ---
+        # Pobieramy klatkę z listy na podstawie zaokrąglonego indeksu
         self.image = frames[int(self.frame_index)]
         
-        # Dodatkowo, jeśli postać patrzy w lewo, musimy obrócić obrazek:
+        # Odwracanie grafiki w zależności od kierunku
         if self.direction == 'left':
-            self.image = pygame.transform.flip(self.image, True, False)  
+            self.image = pygame.transform.flip(self.image, True, False)
+
     def apply_gravity(self):
         self.vel_y += self.gravity
         self.rect.y += self.vel_y
@@ -178,14 +194,25 @@ class Character(pygame.sprite.Sprite):
             if self.state == 'jump': self.state = 'idle'
 
     def check_attack_collision(self, target):
-        if self.is_attacking and self.state != 'bow' and 3 <= int(self.frame_index) <= 4:
-            att_rect = pygame.Rect(0, 0, 40, 40)
-            if self.direction == 'right': att_rect.left = self.hitbox.right
-            else: att_rect.right = self.hitbox.left
-            att_rect.centery = self.hitbox.centery
-            if att_rect.colliderect(target.hitbox) and target.hit_cooldown == 0:
+        # Sprawdzamy stan ataku i czy klatka jest w fazie zamachu (np. od 3 do 5, by być pewnym trafienia)
+        if self.is_attacking and self.state in ['attack1', 'attack2'] and 3 <= int(self.frame_index) <= 5:
+            # Twoje sprawdzone wymiary
+            attack_rect = pygame.Rect(0, 0, 25, 50)
+            
+            if self.direction == 'right':
+                attack_rect.left = self.hitbox.right
+            else:
+                attack_rect.right = self.hitbox.left
+                
+            attack_rect.centery = self.hitbox.centery
+            
+
+            
+            # Logika obrażeń
+            if attack_rect.colliderect(target.hitbox) and target.hit_cooldown == 0:
                 target.take_damage(10)
-                target.hit_cooldown = 20
+                # hit_cooldown na 30 klatek przy 30 FPS to 1 sekunda ochrony
+                target.hit_cooldown = 25
 
     def screen_wrap(self):
         if self.rect.centerx > SCREEN_WIDTH: self.rect.centerx = 0
@@ -339,21 +366,23 @@ class Orc(Character):
 P1_CONTROLS = {'left': pygame.K_a, 'right': pygame.K_d, 'jump': pygame.K_w, 'atk1': pygame.K_r, 'atk2': pygame.K_t, 'special': pygame.K_y, 'block': pygame.K_u}
 P2_CONTROLS = {'left': pygame.K_LEFT, 'right': pygame.K_RIGHT, 'jump': pygame.K_UP, 'atk1': pygame.K_m, 'atk2': pygame.K_COMMA, 'special': pygame.K_PERIOD, 'block': pygame.K_l}
 
+# ... (reszta Twoich klas Character, Soldier, Orc, Arrow pozostaje bez zmian)
+
 async def main():
     global game_state, menu_index, p1_char_index, p2_char_index, game_mode
-    global player1, player2 # Ważne, by mieć dostęp do globalnych graczy
+    global player1, player2, P1_CONTROLS, P2_CONTROLS, is_binding, setting_selected_idx
+
+    bind_list = [
+        ("P1", "Atak 1", "atk1"), ("P1", "Atak 2", "atk2"), ("P1", "Specjalny", "special"), ("P1", "Blok", "block"),
+        ("P2", "Atak 1", "atk1"), ("P2", "Atak 2", "atk2"), ("P2", "Specjalny", "special"), ("P2", "Blok", "block")
+    ]
     
-    # Previews - tworzymy je raz przed pętlą
-    p1_pre_soldier = Soldier(200, 150)
-    p1_pre_orc = Orc(200, 150)
-    p2_pre_soldier = Soldier(650, 150)
-    p2_pre_orc = Orc(650, 150)
+    # Previews
+    p1_pre_soldier = Soldier(200, 150); p1_pre_orc = Orc(200, 150)
+    p2_pre_soldier = Soldier(650, 150); p2_pre_orc = Orc(650, 150)
     
-    # --- DODAJ TO: ---
-    p1_pre_soldier.direction = 'right'
-    p1_pre_orc.direction = 'right'
-    p2_pre_soldier.direction = 'left'
-    p2_pre_orc.direction = 'left'
+    p1_pre_soldier.direction = 'right'; p1_pre_orc.direction = 'right'
+    p2_pre_soldier.direction = 'left'; p2_pre_orc.direction = 'left'
     
     arrows = []
     run = True
@@ -367,23 +396,38 @@ async def main():
                 run = False
             
             if event.type == pygame.KEYDOWN:
-                # --- NAWIGACJA MENU GŁÓWNE ---
+                # 1. MENU GŁÓWNE
                 if game_state == STATE_MENU:
                     if event.key == pygame.K_UP:
                         menu_index = (menu_index - 1) % len(menu_options)
-                    if event.key == pygame.K_DOWN:
+                    elif event.key == pygame.K_DOWN:
                         menu_index = (menu_index + 1) % len(menu_options)
-                    if event.key == pygame.K_RETURN:
+                    elif event.key == pygame.K_RETURN:
                         if menu_index == 0: 
-                            game_mode = "single"
-                            game_state = STATE_CHAR_SELECT
+                            game_mode = "single"; game_state = STATE_CHAR_SELECT
                         elif menu_index == 1: 
-                            game_mode = "multi"
-                            game_state = STATE_CHAR_SELECT
+                            game_mode = "multi"; game_state = STATE_CHAR_SELECT
                         elif menu_index == 2: 
-                            run = False
-                
-                # --- NAWIGACJA WYBÓR POSTACI ---
+                            game_state = STATE_SETTINGS
+
+                # 2. USTAWIENIA (BINDY) - TO TUTAJ MÓGŁ BYĆ PROBLEM
+                elif game_state == STATE_SETTINGS:
+                    if is_binding:
+                        p_idx, label, action = bind_list[setting_selected_idx]
+                        if p_idx == "P1": P1_CONTROLS[action] = event.key
+                        else: P2_CONTROLS[action] = event.key
+                        is_binding = False
+                    else:
+                        if event.key == pygame.K_UP:
+                            setting_selected_idx = (setting_selected_idx - 1) % len(bind_list)
+                        elif event.key == pygame.K_DOWN:
+                            setting_selected_idx = (setting_selected_idx + 1) % len(bind_list)
+                        elif event.key == pygame.K_RETURN:
+                            is_binding = True
+                        elif event.key == pygame.K_ESCAPE:
+                            game_state = STATE_MENU
+
+                # 3. WYBÓR POSTACI
                 elif game_state == STATE_CHAR_SELECT:
                     if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 2
                     if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 2
@@ -393,75 +437,75 @@ async def main():
                     if event.key == pygame.K_RETURN:
                         p1_n = available_chars[p1_char_index]
                         p2_n = available_chars[p2_char_index]
-                        
                         player1 = Soldier(100, 250) if p1_n == "Soldier" else Orc(100, 250)
                         player2 = Soldier(700, 250) if p2_n == "Soldier" else Orc(700, 250)
                         player2.direction = 'left'
                         arrows = []
                         game_state = STATE_PLAYING
-                
-                # --- POWRÓT Z WALKI ---
+
+                # 4. POWRÓT Z WALKI
                 elif game_state == STATE_PLAYING:
                     if (player1.is_dead or player2.is_dead) and event.key == pygame.K_RETURN:
                         game_state = STATE_MENU
 
-        # --- RENDEROWANIE (Poza pętlą eventów!) ---
+        # --- RENDEROWANIE ---
         if game_state == STATE_MENU:
-            title = font_main.render("FANTASY FIGHTER", True, (255, 215, 0))
+            title = font_main.render("Przystań Fight Game", True, (255, 215, 0))
             screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, 50))
             for i, opt in enumerate(menu_options):
                 draw_keyboard_button(opt, 350, 180 + i*80, 300, 60, i == menu_index)
 
         elif game_state == STATE_CHAR_SELECT:
-            label = font_sub.render("SELECT: [A/D] for P1, [Arrows] for P2, [ENTER] Start", True, (255, 255, 255))
-            label_rect = label.get_rect(center=(SCREEN_WIDTH // 2, 50))
-            screen.blit(label, label_rect)
-            
-            # Podgląd wybranej postaci
+            label = font_sub.render("Wybór: [A/D] P1, [Strzałki] P2, [ENTER] Start", True, (255, 255, 255))
+            screen.blit(label, (SCREEN_WIDTH // 2 - label.get_width()//2, 50))
             p1_v = p1_pre_soldier if p1_char_index == 0 else p1_pre_orc
             p2_v = p2_pre_soldier if p2_char_index == 0 else p2_pre_orc
-            
-            p1_v.update_animation()
-            p2_v.update_animation()
-            
-            screen.blit(p1_v.image, (200, 150))
-            screen.blit(p2_v.image, (650, 150))
-            
-            # Podpisy pod postaciami
+            p1_v.update_animation(); p2_v.update_animation()
+            screen.blit(p1_v.image, (200, 150)); screen.blit(p2_v.image, (650, 150))
             p1_name = font_sub.render(f"P1: {available_chars[p1_char_index]}", True, (100, 100, 255))
             p2_name = font_sub.render(f"P2: {available_chars[p2_char_index]}", True, (255, 100, 100))
-            screen.blit(p1_name, (220, 350))
-            screen.blit(p2_name, (670, 350))
+            screen.blit(p1_name, (220, 350)); screen.blit(p2_name, (670, 350))
+
+        elif game_state == STATE_SETTINGS:
+            header = font_main.render("USTAWIENIA KLAWISZY", True, (255, 255, 255))
+            screen.blit(header, (SCREEN_WIDTH//2 - header.get_width()//2, 30))
+            for i, (p_idx, label, action) in enumerate(bind_list):
+                current_controls = P1_CONTROLS if p_idx == "P1" else P2_CONTROLS
+                try:
+                    k_val = current_controls[action]
+                    key_name = pygame.key.name(k_val).upper()
+                except:
+                    key_name = "???"
+                text = f"{p_idx} {label}: {key_name}"
+                if is_binding and i == setting_selected_idx:
+                    text = f"{p_idx} {label}: <WCIŚNIJ KLAWISZ>"
+                draw_keyboard_button(text, 250, 100 + i * 45, 500, 35, i == setting_selected_idx)
+            # Dodatkowa informacja na dole
+            hint = font_sub.render("ESC - Powrót", True, (150, 150, 150))
+            screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))
 
         elif game_state == STATE_PLAYING:
-            player1.face_target(player2)
-            player2.face_target(player1)
-            
+            player1.face_target(player2); player2.face_target(player1)
             player1.update(player2, arrows, P1_CONTROLS)
             player2.update(player1, arrows, P2_CONTROLS)
-            player1.screen_wrap()
-            player2.screen_wrap()
-            
+            player1.screen_wrap(); player2.screen_wrap()
             for a in arrows[:]:
                 a.update(player1, player2, arrows)
                 screen.blit(a.image, a.rect)
-            
             player1.draw_hp_bar(screen, 20, 20)
             player2.draw_hp_bar(screen, SCREEN_WIDTH - 20, 20, align_right=True)
-            
             screen.blit(player1.image, player1.rect)
             screen.blit(player2.image, player2.rect)
-            
             if player1.is_dead or player2.is_dead:
-                win_text = "PLAYER 1 WINS!" if player2.is_dead else "PLAYER 2 WINS!"
+                win_text = "PLAYER 1 Wygrał!" if player2.is_dead else "PLAYER 2 Wygrał!"
                 txt = font_main.render(win_text, True, (255, 255, 255))
                 screen.blit(txt, (SCREEN_WIDTH//2 - txt.get_width()//2, 200))
-                sub = font_sub.render("Press ENTER for Menu", True, (200, 200, 200))
+                sub = font_sub.render("Naciśnij ENTER aby wrócić do menu", True, (200, 200, 200))
                 screen.blit(sub, (SCREEN_WIDTH//2 - sub.get_width()//2, 280))
 
         pygame.display.flip()
-        clock.tick(30)
-        await asyncio.sleep(0)
+        clock.tick(60) # Standardowe 60 FPS dla web
+        await asyncio.sleep(0) # Kluczowe dla pygbag!
 
-if __name__ == "__main__":
-    asyncio.run(main())
+# Start
+asyncio.run(main())
