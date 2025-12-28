@@ -203,52 +203,63 @@ class Arrow(pygame.sprite.Sprite):
         self.image = pygame.Surface((20, 4))
         self.image.fill((200, 200, 200))
         self.rect = self.image.get_rect()
-        self.rect.centery = y + 20
+        self.active = True  # NOWE: Flaga aktywności
+        
         if direction == 'right':
             self.rect.left = x
-            self.vel = self.speed
+            self.vel_x = self.speed
         else:
             self.rect.right = x
-            self.vel = -self.speed
-            self.image = pygame.transform.flip(self.image, True, False)
-        self.rect.centery = y
+            self.vel_x = -self.speed
+        
+        self.rect.centery = y 
         self.damage = 15
 
-    def update(self, player1, player2, arrows_list):
-        self.rect.x += self.vel
-        target = player2 if self.owner == player1 else player1
-        if self.rect.colliderect(target.hitbox):
-            if not target.is_blocking:
-                target.take_damage(self.damage)
-            if self in arrows_list: arrows_list.remove(self)
-        elif self.rect.right < 0 or self.rect.left > SCREEN_WIDTH:
-            if self in arrows_list: arrows_list.remove(self)
+    def update(self, targets): # Zmieniamy argumenty na listę celów
+        self.rect.x += self.vel_x 
+        
+        # Sprawdzenie kolizji z każdym potencjalnym celem
+        for target in targets:
+            if target and target != self.owner and not target.is_dead:
+                if self.rect.colliderect(target.hitbox):
+                    if not target.is_blocking:
+                        target.take_damage(self.damage)
+                    self.active = False # Zamiast remove, flagujemy
+                    return
 
+        # Usuwanie poza ekranem
+        if self.rect.right < 0 or self.rect.left > 1000: # 1000 to SCREEN_WIDTH
+            self.active = False
 # --- KLASA BAZOWA ---
 class Character(pygame.sprite.Sprite):
-    def __init__(self, x, y, folder, scale=2.5):
+    # Dodajemy hp, speed i damage do argumentów (z domyślnymi wartościami)
+    def __init__(self, x, y, folder, scale=2.5, hp=100, speed=5, damage=10):
         super().__init__()
         self.folder = folder
         self.scale = scale
+        
+        # STATYSTYKI (teraz poprawnie przypisane z argumentów)
+        self.max_hp = hp
+        self.current_hp = hp
+        self.vel = speed
+        self.damage = damage # Używamy 'damage' zgodnie z Twoją funkcją kolizji
+        
+        # Reszta Twoich zmiennych...
         self.animations = {}
         self.state = 'idle'
         self.frame_index = 0
         self.direction = 'right'
         self.is_attacking = False
         self.is_blocking = False
-        self.vel = 5
-        self.max_hp = 100
-        self.current_hp = 100
         self.is_dead = False
         self.hit_cooldown = 0
-        self.rect = pygame.Rect(x, y, 40, 60) # Rozmiar zbliżony do TILE_SIZE
+        self.rect = pygame.Rect(x, y, 40, 60)
         self.hitbox = pygame.Rect(x, y, 40, 60)
         self.vel_y = 0
         self.gravity = 0.8
         self.jump_height = -16
         self.is_jumping = False
-        self.ground_y = y
-        self.image = pygame.Surface((100, 100)) # Placeholder, żeby gra nie wywaliła się przed pierwszym update
+        self.image = pygame.Surface((100, 100))
         self.cpu_action_timer = 0
         self.cpu_current_action = None
 
@@ -304,23 +315,15 @@ class Character(pygame.sprite.Sprite):
             pygame.draw.rect(surface, (255, 255, 255), (x, y, bar_w, bar_h), 2)
 
     def update_animation(self):
-        # 1. Wybór odpowiedniej listy klatek (frames)
+        # 1. Wybór odpowiedniej listy klatek
         if self.is_dead:
             frames = self.animations['death']
-            # Zatrzymujemy na ostatniej klatce śmierci
             self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
         elif self.state == 'block' and self.is_blocking:
-            if 'block' in self.animations:
-                frames = self.animations['block']
-                self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
-            else:
-                # Jeśli Soldier nie ma animacji bloku, używamy 'idle'
-                frames = self.animations['idle']
-                self.frame_index = (self.frame_index + 0.18) % len(frames)
+            frames = self.animations.get('block', self.animations['idle'])
+            self.frame_index = min(self.frame_index + 0.15, len(frames) - 1)
         else:
-            # Domyślnie bierzemy stan, a jak go nie ma - idle
             frames = self.animations.get(self.state, self.animations['idle'])
-            
             anim_speed = 0.25 if (self.is_attacking or self.state == 'hit') else 0.18
             self.frame_index += anim_speed
 
@@ -330,16 +333,8 @@ class Character(pygame.sprite.Sprite):
                     self.state = 'idle'
                 self.frame_index = 0 
 
-        # 2. Wyświetlenie klatki
+        # 2. Pobranie obrazu (TYLKO RAZ NA KOŃCU)
         self.image = frames[int(self.frame_index)]
-        
-        if self.direction == 'left':
-            self.image = pygame.transform.flip(self.image, True, False)
-        # --- KLUCZOWE USTAWIENIE OBRAZU ---
-        # Pobieramy klatkę z listy na podstawie zaokrąglonego indeksu
-        self.image = frames[int(self.frame_index)]
-        
-        # Odwracanie grafiki w zależności od kierunku
         if self.direction == 'left':
             self.image = pygame.transform.flip(self.image, True, False)
 
@@ -372,10 +367,8 @@ class Character(pygame.sprite.Sprite):
 
 
     def check_attack_collision(self, target):
-        # 1. Sprawdzamy stan i klatkę (zwiększyłem zakres klatek dla pewności)
         if self.is_attacking and self.state in ['attack1', 'attack2'] and 2 <= int(self.frame_index) <= 5:
             
-            # 2. Tworzymy obszar ataku (powiększyłem go nieco do 40x60)
             attack_rect = pygame.Rect(0, 0, 40, 60)
             
             if self.direction == 'right':
@@ -385,26 +378,20 @@ class Character(pygame.sprite.Sprite):
             
             attack_rect.centery = self.hitbox.centery
 
-            # --- LINIA DEBUGOWANIA (opcjonalna) ---
-            # Odkomentuj poniższą linię, aby widzieć gdzie uderzasz (czerwony kwadrat)
-            # pygame.draw.rect(screen, (255, 0, 0), attack_rect, 2)
-
-            # 3. Obsługa listy (CPU) i pojedynczego celu (PVP)
             targets_to_check = target if isinstance(target, list) else [target]
 
             for t in targets_to_check:
-                # Sprawdzamy czy cel istnieje, nie jest None i nie jest martwy
                 if t and t != self and not t.is_dead:
-                    # Pobieramy hitbox celu (obsługa różnych nazw atrybutów)
                     target_box = getattr(t, 'hitbox', t.rect)
                     
                     if attack_rect.colliderect(target_box):
                         if t.hit_cooldown == 0:
-                            # ZADAWANIE OBRAŻEŃ
-                            t.take_damage(10)
+                            # --- ZMIANA TUTAJ: Pobieramy siłę ataku postaci ---
+                            dmg = getattr(self, 'damage', 10) # Domyślnie 10, jeśli nie ustawiono
+                            t.take_damage(dmg)
+                            
                             t.hit_cooldown = 20
-                            # Możesz dodać print, żeby widzieć w konsoli czy trafia:
-                            # print(f"Trafiono: {t}")
+                            print(f"Trafiono! Obrażenia: {dmg}")
 
     def screen_wrap(self):
         if self.rect.centerx > SCREEN_WIDTH: self.rect.centerx = 0
@@ -565,7 +552,8 @@ class Golem(Character):
     def __init__(self, x, y):
         # Ścieżka do folderu z Golemem
         folder_path = "Assets/Golem"
-        super().__init__(x, y, folder_path, scale=2.8) # Golem może być nieco większy
+        
+        super().__init__(x, y, folder_path, scale=2.8, hp=200, speed=3, damage=20) # Golem może być nieco większy
         self.image_offset_y = 0  # Golem jest duży i wypełnia klatkę
         # Wymiary klatki Golema: 90x64
         W, H = 90, 64
@@ -627,7 +615,7 @@ class HumanSoldier(Character):
     def __init__(self, x, y):
         # Ścieżka do Twoich nowych plików 96x96
         folder_path = "Assets/Human_Soldier_Sword_Shield"
-        super().__init__(x, y, folder_path, scale=2.5)
+        super().__init__(x, y, folder_path, scale=2.5, hp=100, speed=6, damage=12)
         self.image_offset_y = 100 # Przykładowa wartość - zwiększaj, jeśli nadal lewituje
         # Wymiary klatki to 96x96
         W, H = 96, 96
@@ -692,7 +680,7 @@ class HumanSoldier(Character):
 class Soldier(Character):
     def __init__(self, x, y):
         # Upewnij się, że folder "Assets" ma dużą literę, jeśli tak masz na dysku
-        super().__init__(x, y, "Assets/Soldier")
+        super().__init__(x, y, "Assets/Soldier", hp=100, speed=6, damage=12)
         self.animations = {
             'idle': self.load_sheet('Soldier_Idle.png', 6, 100, 100),
             'walk': self.load_sheet('Soldier_Walk.png', 8, 100, 100),
@@ -761,7 +749,7 @@ class Soldier(Character):
         self.update_animation()
 class Orc(Character):
     def __init__(self, x, y):
-        super().__init__(x, y, "Assets/Orc")
+        super().__init__(x, y, "Assets/Orc", hp=100, speed=6, damage=12)
         self.image_offset_y = 110
         self.animations = {
             'idle': self.load_sheet('Orc_Idle.png', 6, 100, 100),
@@ -856,13 +844,13 @@ async def main():
     potions = []
     potion_spawn_timer = 0
     POTION_SPAWN_COOLDOWN = 400 # ok. 8 sekund przy 50 FPS   
-
+     
     run = True
     
     while run:
         screen.fill((30, 30, 30))
         events = pygame.event.get()
-
+        all_targets = [player1, player2] + cpu_enemies
         for event in events:
             if event.type == pygame.QUIT:
                 run = False
@@ -1093,32 +1081,76 @@ async def main():
                     # Opcjonalnie: ulecz gracza o 20 HP za wygraną
                     player1.current_hp = min(player1.current_hp + 20, player1.max_hp)
             # --- TELEPORTACJA I RENDEROWANIE ---
+            # --- TELEPORTACJA I RENDEROWANIE ---
+            # --- TELEPORTACJA I RENDEROWANIE ---
+            # --- TELEPORTACJA I RENDEROWANIE ---
             margin = 2
             offset = 10
             
-            for p in all_characters:
-                if p:
-                    # Logika teleportacji (Wrap-around)
+            # Tworzymy kopię listy, aby uniknąć błędów przy usuwaniu wrogów w trakcie pętli
+            render_list = [p for p in all_characters if p is not None]
+
+            for p in render_list:
+                # 1. Logika teleportacji
+                try:
                     if p.rect.right > SCREEN_WIDTH - margin:
                         p.rect.x = offset
                     elif p.rect.left < margin:
                         p.rect.x = SCREEN_WIDTH - p.rect.width - offset
-                    
-                    # Rysowanie postaci z uwzględnieniem offsetu stóp
-                    off_y = getattr(p, 'image_offset_y', 0)
-                    img_rect = p.image.get_rect(midbottom=(p.rect.centerx, p.rect.bottom + off_y))
-                    screen.blit(p.image, img_rect)
+                except: pass
+                
+                # 2. Rysowanie grafiki postaci
+                off_y = getattr(p, 'image_offset_y', 0)
+                img_rect = p.image.get_rect(midbottom=(p.rect.centerx, p.rect.bottom + off_y))
+                screen.blit(p.image, img_rect)
 
+                # 3. PASEK HP NAD PRZECIWNIKAMI (Tylko Single Player)
+                # Sprawdzamy czy to nie Gracz 1 i czy to nie Gracz 2
+                is_p1 = (p == player1)
+                is_p2 = (game_mode == "multi" and p == player2)
+                
+                if not is_p1 and not is_p2 and not getattr(p, 'is_dead', False):
+                    # Pobieramy bezpiecznie wartości
+                    curr_h = getattr(p, 'current_hp', 0)
+                    max_h = getattr(p, 'max_hp', 0)
+                    
+                    if max_h > 0:
+                        bar_w = 40
+                        bar_h = 5
+                        # Pozycjonowanie (p.rect musi istnieć)
+                        bx = p.rect.centerx - bar_w // 2
+                        by = p.rect.top - 15
+                        
+                        # Rysowanie tła i życia
+                        pygame.draw.rect(screen, (100, 0, 0), (bx, by, bar_w, bar_h))
+                        fill_w = int(bar_w * max(0, min(curr_h / max_h, 1)))
+                        pygame.draw.rect(screen, (0, 255, 0), (bx, by, fill_w, bar_h))
+                        pygame.draw.rect(screen, (0, 0, 0), (bx, by, bar_w, bar_h), 1)
             # --- POCISKI I POTKI ---
             for pot in potions[:]:
                 if pot.update(platforms, all_characters): potions.remove(pot)
                 else: screen.blit(pot.image, pot.rect)
 
-            for a in arrows[:]:
-                # W single player strzały sprawdzają kolizję z listą wrogów
-                targets = [player2] if game_mode == "multi" else cpu_enemies
-                a.update(player1, targets, arrows)
-                screen.blit(a.image, a.rect)
+            # --- Wewnątrz pętli gry (while True) ---
+
+            # 1. Przygotuj listę celów (wszyscy, którzy mogą dostać strzałą)
+            all_targets = [player1, player2] + cpu_enemies
+            
+            # --- POPRAWIONA LOGIKA STRZAŁ ---
+            # 1. Przygotuj listę celów
+            all_targets = [player1, player2] + cpu_enemies
+            
+            # 2. Aktualizuj każdą strzałę
+            # Używamy nazwy 'arrows', bo taką zdefiniowałeś na początku funkcji main
+            for arrow in arrows:
+                arrow.update(all_targets)
+            
+            # 3. Bezpieczne usuwanie nieaktywnych strzał (Filtrowanie)
+            arrows[:] = [a for a in arrows if a.active]
+            
+            # 4. Rysowanie
+            for arrow in arrows:
+                screen.blit(arrow.image, arrow.rect)
 
             # --- INTERFEJS (HUD) ---
             player1.draw_hp_bar(screen, 20, 20)
