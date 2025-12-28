@@ -1,6 +1,11 @@
 import pygame
 import asyncio
 import pygbag
+import os 
+import random
+
+def get_path(relative_path):
+    return os.path.join(os.path.dirname(__file__), relative_path)
 
 player1 = None
 player2 = None
@@ -29,9 +34,12 @@ is_binding = False        # Czy czekamy na wciśnięcie klawisza
 menu_options = ["Jeden Gracz", "Dwóch Graczy", "USTAWIENIA"]
 menu_index = 0
 game_mode = "multi"
-available_chars = ["Soldier", "Orc"]
+available_chars = ["Soldier", "Orc", "Knight"]
 p1_char_index = 0
 p2_char_index = 1
+# Sterowanie
+P1_CONTROLS = {'left': pygame.K_a, 'right': pygame.K_d, 'jump': pygame.K_w, 'atk1': pygame.K_r, 'atk2': pygame.K_t, 'special': pygame.K_y, 'block': pygame.K_u}
+P2_CONTROLS = {'left': pygame.K_LEFT, 'right': pygame.K_RIGHT, 'jump': pygame.K_UP, 'atk1': pygame.K_m, 'atk2': pygame.K_COMMA, 'special': pygame.K_PERIOD, 'block': pygame.K_l}
 
 # --- FUNKCJA RYSUJĄCA PRZYCISK KLAWIATUROWY ---
 def draw_keyboard_button(text, x, y, width, height, is_selected):
@@ -46,6 +54,73 @@ def draw_keyboard_button(text, x, y, width, height, is_selected):
     text_rect = text_surf.get_rect(center=rect.center)
     screen.blit(text_surf, text_rect)
 
+
+# --- KONFIGURACJA TILESETU ---
+# Plik: tileset.png (wymiary 96x160)
+# Kafelki: 16x16
+# 96 / 16 = 6 kafelków w rzędzie
+TILE_SCALE = 3
+TILE_SIZE_ORIGINAL = 16
+TILE_SIZE = TILE_SIZE_ORIGINAL * TILE_SCALE
+
+def load_tiles_from_folder(folder_path, scale):
+    tiles_list = []
+    # Zakładamy, że kafelki są ponumerowane od 0 do np. 59
+    # tak jak w Twoim tilesecie 96x160 (6x10 = 60 kafelków)
+    for i in range(60): 
+        file_path = f"{folder_path}/kafelek{i}.png"
+        try:
+            # Wczytujemy pojedynczy plik 16x16
+            tile = pygame.image.load(file_path).convert_alpha()
+            # Skalujemy go od razu do 48x48
+            tile = pygame.transform.scale(tile, (16 * scale, 16 * scale))
+            tiles_list.append(tile)
+        except:
+            # Jeśli brakuje jakiegoś numeru, wstawiamy pusty różowy kwadrat (ułatwia debugowanie)
+            err_surf = pygame.Surface((16 * scale, 16 * scale))
+            err_surf.fill((255, 0, 255)) 
+            tiles_list.append(err_surf)
+            # print(f"Brak kafelka: {file_path}") # Opcjonalne do logów
+            
+    return tiles_list
+
+# Wywołanie (upewnij się, że ścieżka jest poprawna)
+tiles = load_tiles_from_folder("Assets/kafelki", TILE_SCALE)
+
+# --- NOWA MAPA ---
+# 0 - puste tło
+# 1, 2 - kafelki podłogi (na przemian)
+# COLLISION_TILES zawiera 1 i 2, żeby można było po nich chodzić
+COLLISION_TILES = [0, 1, 2, 13, 15, 34, 35, 36]
+
+game_map = [
+    [43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43],
+    [43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 44, 43, 43, 43, 43],
+    [43, 43, 44, 44, 43, 43, 43, 43, 44, 44, 44, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43],
+    [43, 43, 43, 43, 43, 44, 43, 43, 43, 44, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43],
+    [43, 43, 43, 43, 44, 13, 2, 15, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43], # Platforma
+    [43, 43, 43, 43, 43, 43, 47, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43],
+    [43, 43, 43, 43, 43, 43, 48, 43, 43, 43, 43, 40, 34, 35, 36, 40, 43, 43, 43, 43, 43], # Platforma
+    [43, 43, 43, 43, 43, 44, 48, 43, 43, 43, 43, 40, 44, 43, 43, 40, 43, 43, 43, 43, 43],
+    [43, 43, 43, 43, 43, 43, 37, 43, 43, 43, 43, 42, 43, 43, 43, 42, 43, 43, 43, 43, 43],
+    [1, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], # Dół 1, 2, 1, 2...
+]
+
+# Funkcja budująca kolizje (wywołuj przy starcie walki)
+platforms = []
+def build_platforms():
+    platforms.clear()
+    for row_idx, row in enumerate(game_map):
+        for col_idx, tile_idx in enumerate(row):
+            if tile_idx in COLLISION_TILES:
+                # Tworzymy prostokąt kolizji dokładnie tam, gdzie rysujemy kafelek
+                new_rect = pygame.Rect(col_idx * TILE_SIZE, row_idx * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+                platforms.append(new_rect)
+
+# --- POPRAWKA W RYSOWANIU (wewnątrz pętli gry) ---
+# Zamień fragment rysowania postaci na ten poniżej, żeby stały NA klockach:
+# img_rect = player.image.get_rect(centerx=player.rect.centerx, bottom=player.rect.bottom)
+# screen.blit(player.image, img_rect)
 # --- KLASA POCISKU ---
 class Arrow(pygame.sprite.Sprite):
     def __init__(self, x, y, direction, owner):
@@ -92,8 +167,8 @@ class Character(pygame.sprite.Sprite):
         self.current_hp = 100
         self.is_dead = False
         self.hit_cooldown = 0
-        self.rect = pygame.Rect(x, y, 100 * scale, 100 * scale)
-        self.hitbox = pygame.Rect(x, y, 45, 55)
+        self.rect = pygame.Rect(x, y, 40, 60) # Rozmiar zbliżony do TILE_SIZE
+        self.hitbox = pygame.Rect(x, y, 40, 60)
         self.vel_y = 0
         self.gravity = 0.8
         self.jump_height = -16
@@ -194,15 +269,24 @@ class Character(pygame.sprite.Sprite):
         if self.direction == 'left':
             self.image = pygame.transform.flip(self.image, True, False)
 
-    def apply_gravity(self):
+    def apply_gravity(self, platforms_list=None):
+        if platforms_list is None:
+            platforms_list = platforms
+            
         self.vel_y += self.gravity
         self.rect.y += self.vel_y
-        if self.rect.y >= self.ground_y:
-            self.rect.y = self.ground_y
-            self.vel_y = 0
-            self.is_jumping = False
-            if self.state == 'jump': self.state = 'idle'
-
+    
+        # Sprawdzanie kolizji z platformami
+        for platform in platforms_list:
+            if self.rect.colliderect(platform):
+                if self.vel_y > 0: # Tylko gdy spadamy
+                    # Sprawdzamy, czy przed ruchem byliśmy nad platformą 
+                    # (zapobiega to "teleportacji" do boku kafelka)
+                    if self.rect.bottom - self.vel_y <= platform.top :
+                        self.rect.bottom = platform.top
+                        self.vel_y = 0
+                        self.is_jumping = False
+    
     def check_attack_collision(self, target):
         # Sprawdzamy stan ataku i czy klatka jest w fazie zamachu (np. od 3 do 5, by być pewnym trafienia)
         if self.is_attacking and self.state in ['attack1', 'attack2'] and 3 <= int(self.frame_index) <= 5:
@@ -338,11 +422,112 @@ class Character(pygame.sprite.Sprite):
                     self.state = 'bow'; self.is_attacking = True; self.frame_index = 0; self.arrow_shot = False
         
         # 6. Aktualizacje fizyki
-        self.apply_gravity()
+        self.apply_gravity(platforms) # Dodano argument 'platforms'
         self.update_hitbox()
         self.check_attack_collision(target)
         if self.hit_cooldown > 0: self.hit_cooldown -= 1
         self.update_animation()
+
+
+
+class HealthPotion(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        # Możesz załadować własny obrazek: pygame.image.load("Assets/potion.png")
+        self.image = pygame.Surface((24, 24), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, (255, 0, 0), (12, 12), 10) # Czerwone kółko jako placeholder
+        
+        self.rect = self.image.get_rect()
+        self.rect.x = random.randint(50, SCREEN_WIDTH - 50)
+        self.rect.y = -50  # Zaczyna nad ekranem
+        self.vel_y = 0
+        self.gravity = 0.5
+        self.heal_amount = 20
+
+    def update(self, platforms_list, players):
+        # Spadanie
+        self.vel_y += self.gravity
+        self.rect.y += self.vel_y
+
+        # Kolizja z podłogą
+        for platform in platforms_list:
+            if self.rect.colliderect(platform):
+                if self.vel_y > 0:
+                    self.rect.bottom = platform.top
+                    self.vel_y = 0
+
+        # Kolizja z graczami
+        for p in players:
+            if p and not p.is_dead and self.rect.colliderect(p.hitbox):
+                p.current_hp = min(p.max_hp, p.current_hp + self.heal_amount)
+                return True # Miksturka do usunięcia
+        return False
+
+class HumanSoldier(Character):
+    def __init__(self, x, y):
+        # Ścieżka do Twoich nowych plików 96x96
+        folder_path = "Assets/Human_Soldier_Sword_Shield"
+        super().__init__(x, y, folder_path, scale=2.5)
+        
+        # Wymiary klatki to 96x96
+        W, H = 96, 96
+        
+        self.animations = {
+            'idle':    self.load_sheet('Human_Soldier_Sword_Shield_Idle-Sheet.png', 6, W, H),
+            'walk':    self.load_sheet('Human_Soldier_Sword_Shield_Walk-Sheet.png', 8, W, H),
+            'jump':    self.load_sheet('Human_Soldier_Sword_Shield_Jump_Fall-Sheet.png', 5, W, H),
+            'attack1': self.load_sheet('Human_Soldier_Sword_Shield_Attack1-Sheet.png', 8, W, H),
+            'attack2': self.load_sheet('Human_Soldier_Sword_Shield_Attack2-Sheet.png', 8, W, H),
+            'block':   self.load_sheet('Human_Soldier_Sword_Shield_Block-Sheet.png', 6, W, H),
+            'hit':     self.load_sheet('Human_Soldier_Sword_Shield_Hurt-Sheet.png', 4, W, H),
+            'death':   self.load_sheet('Human_Soldier_Sword_Shield_Death-Sheet.png', 10, W, H),
+        }
+
+    def update(self, target, arrows_list, controls):
+        if self.is_dead: 
+            self.update_animation()
+            return
+
+        keys = pygame.key.get_pressed()
+
+        # Rycerz ma dedykowaną animację bloku
+        self.is_blocking = keys[controls['block']] and not self.is_jumping and not self.is_attacking
+        
+        if self.is_blocking:
+            self.state = 'block'
+        elif not self.is_attacking and self.state != 'hit':
+            # Ruch
+            if keys[controls['left']]: 
+                self.rect.x -= self.vel
+                self.direction = 'left'
+                if not self.is_jumping: self.state = 'walk'
+            elif keys[controls['right']]: 
+                self.rect.x += self.vel
+                self.direction = 'right'
+                if not self.is_jumping: self.state = 'walk'
+            else:
+                if not self.is_jumping: self.state = 'idle'
+            
+            # Skok
+            if keys[controls['jump']] and not self.is_jumping:
+                self.vel_y = self.jump_height
+                self.is_jumping = True
+                self.state = 'jump'
+                self.frame_index = 0
+            
+            # Ataki
+            if keys[controls['atk1']]: 
+                self.state = 'attack1'; self.is_attacking = True; self.frame_index = 0
+            elif keys[controls['atk2']]: 
+                self.state = 'attack2'; self.is_attacking = True; self.frame_index = 0
+
+        self.apply_gravity(platforms)
+        self.update_hitbox()
+        self.check_attack_collision(target)
+        
+        if self.hit_cooldown > 0: self.hit_cooldown -= 1
+        self.update_animation()
+
 # --- KLASY POSTACI ---
 class Soldier(Character):
     def __init__(self, x, y):
@@ -404,7 +589,8 @@ class Soldier(Character):
             self.arrow_shot = True
 
         # 4. Fizyka i Hitboxy (zawsze aktywne)
-        self.apply_gravity()
+        # Wewnątrz Orc.update oraz Soldier.update
+        self.apply_gravity(platforms)
         self.update_hitbox()
         self.check_attack_collision(target)
         
@@ -474,7 +660,8 @@ class Orc(Character):
 
         # 3. FIZYKA I ANIMACJA (zawsze poza powyższym IF-em)
         # Dzięki temu grawitacja działa nawet jak postać dostaje hit
-        self.apply_gravity()
+    
+        self.apply_gravity(platforms)
         self.update_hitbox()
         self.check_attack_collision(target)
         
@@ -482,11 +669,14 @@ class Orc(Character):
             self.hit_cooldown -= 1
             
         self.update_animation()
-# Sterowanie
-P1_CONTROLS = {'left': pygame.K_a, 'right': pygame.K_d, 'jump': pygame.K_w, 'atk1': pygame.K_r, 'atk2': pygame.K_t, 'special': pygame.K_y, 'block': pygame.K_u}
-P2_CONTROLS = {'left': pygame.K_LEFT, 'right': pygame.K_RIGHT, 'jump': pygame.K_UP, 'atk1': pygame.K_m, 'atk2': pygame.K_COMMA, 'special': pygame.K_PERIOD, 'block': pygame.K_l}
-
-# ... (reszta Twoich klas Character, Soldier, Orc, Arrow pozostaje bez zmian)
+def build_platforms():
+    platforms.clear()
+    for row_idx, row in enumerate(game_map):
+        for col_idx, tile_idx in enumerate(row):
+            if tile_idx in COLLISION_TILES:
+                # Usunąłem "+ 150", aby mapa pokrywała się z rysowaniem
+                new_rect = pygame.Rect(col_idx * TILE_SIZE, row_idx * TILE_SIZE, TILE_SIZE, TILE_SIZE)
+                platforms.append(new_rect)
 
 async def main():
     global game_state, menu_index, p1_char_index, p2_char_index, game_mode
@@ -498,13 +688,17 @@ async def main():
     ]
     
     # Previews
-    p1_pre_soldier = Soldier(200, 150); p1_pre_orc = Orc(200, 150)
-    p2_pre_soldier = Soldier(650, 150); p2_pre_orc = Orc(650, 150)
+    p1_pre_soldier = Soldier(200, 150); p1_pre_orc = Orc(200, 150); p1_pre_knight = HumanSoldier(200, 150)
+    p2_pre_soldier = Soldier(650, 150); p2_pre_orc = Orc(650, 150); p2_pre_knight = HumanSoldier(650, 150)
     
     p1_pre_soldier.direction = 'right'; p1_pre_orc.direction = 'right'
     p2_pre_soldier.direction = 'left'; p2_pre_orc.direction = 'left'
-    
+    p2_pre_knight.direction = 'left'; p1_pre_knight.direction = 'right'
     arrows = []
+
+    potions = []
+    potion_spawn_timer = 0
+
     run = True
     
     while run:
@@ -553,18 +747,35 @@ async def main():
                     if event.key == pygame.K_ESCAPE:
                         game_state = STATE_MENU
                         
-                    if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 2
-                    if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 2
-                    if event.key == pygame.K_LEFT: p2_char_index = (p2_char_index - 1) % 2
-                    if event.key == pygame.K_RIGHT: p2_char_index = (p2_char_index + 1) % 2
-                    
+                    # Zmień % 2 na % 3
+                    if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 3
+                    if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 3
+                    if event.key == pygame.K_LEFT: p2_char_index = (p2_char_index - 1) % 3
+                    if event.key == pygame.K_RIGHT: p2_char_index = (p2_char_index + 1) % 3
+                                        
                     if event.key == pygame.K_RETURN:
-                        p1_n = available_chars[p1_char_index]
-                        p2_n = available_chars[p2_char_index]
-                        player1 = Soldier(100, 250) if p1_n == "Soldier" else Orc(100, 250)
-                        player2 = Soldier(700, 250) if p2_n == "Soldier" else Orc(700, 250)
-                        player2.direction = 'left'
+                        # Funkcja pomocnicza do tworzenia wybranej klasy
+                        def spawn(name, x, y):
+                            if name == "Soldier": return Soldier(x, y)
+                            if name == "Orc": return Orc(x, y)
+                            if name == "Knight": return HumanSoldier(x, y)
+                            return Soldier(x, y)
+                    
+                        player1 = spawn(available_chars[p1_char_index], 100, 250)
+                        player2 = spawn(available_chars[p2_char_index], 700, 250)
+                        player2.direction = 'left'          
+                
+                
+                        player1.direction = 'right'
                         arrows = []
+                        build_platforms()
+                        game_state = STATE_PLAYING
+                    if event.key == pygame.K_RETURN:
+                        # ... Twoje istniejące przypisania player1, player2 ...
+                        arrows = []
+                        potions = [] # <-- DODAJ TĘ LINIĘ
+                        potion_spawn_timer = 0 # <-- I TĘ
+                        build_platforms()
                         game_state = STATE_PLAYING
 
                 # 4. POWRÓT Z WALKI (DODANY ESC)
@@ -588,20 +799,30 @@ async def main():
             label = font_sub.render("Wybór: [A/D] P1, [Strzałki] P2, [ENTER] Start", True, (255, 255, 255))
             screen.blit(label, (SCREEN_WIDTH // 2 - label.get_width()//2, 50))
             
-            p1_v = p1_pre_soldier if p1_char_index == 0 else p1_pre_orc
-            p2_v = p2_pre_soldier if p2_char_index == 0 else p2_pre_orc
+            # --- LOGIKA WYBORU PODGLĄDU ---
+            # Gracz 1
+            if p1_char_index == 0: p1_v = p1_pre_soldier
+            elif p1_char_index == 1: p1_v = p1_pre_orc
+            else: p1_v = p1_pre_knight
+            
+            # Gracz 2
+            if p2_char_index == 0: p2_v = p2_pre_soldier
+            elif p2_char_index == 1: p2_v = p2_pre_orc
+            else: p2_v = p2_pre_knight
+            # ------------------------------
+         
             p1_v.update_animation(); p2_v.update_animation()
             
-            screen.blit(p1_v.image, (200, 150)); screen.blit(p2_v.image, (650, 150))
+            screen.blit(p1_v.image, (200, 150))
+            screen.blit(p2_v.image, (650, 150))
             
             p1_name = font_sub.render(f"P1: {available_chars[p1_char_index]}", True, (100, 100, 255))
             p2_name = font_sub.render(f"P2: {available_chars[p2_char_index]}", True, (255, 100, 100))
             screen.blit(p1_name, (220, 350)); screen.blit(p2_name, (670, 350))
             
-            # Napis ESC na dole ekranu wyboru
             hint = font_sub.render("ESC - Powrót", True, (150, 150, 150))
-            screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))   
-                                     
+            screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))
+                                    
         elif game_state == STATE_SETTINGS:
             header = font_main.render("USTAWIENIA KLAWISZY", True, (255, 255, 255))
             screen.blit(header, (SCREEN_WIDTH//2 - header.get_width()//2, 30))
@@ -621,7 +842,14 @@ async def main():
             screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))
 
         elif game_state == STATE_PLAYING:
-            # 1. Logika orientacji (patrzenie na siebie)
+            # Map
+            for row_idx, row in enumerate(game_map):
+                for col_idx, tile_idx in enumerate(row):
+                    # Rysujemy tylko jeśli to nie jest "puste" (np. 43 to u Ciebie tło)
+                    # Jeśli kafelek 43 to po prostu przeźroczysty PNG, to warunek if jest zbędny
+                    if tile_idx < len(tiles):
+                        screen.blit(tiles[tile_idx], (col_idx * TILE_SIZE, row_idx * TILE_SIZE))
+         # 1. Logika orientacji (patrzenie na siebie)
             player1.face_target(player2)
             player2.face_target(player1)
             
@@ -643,10 +871,15 @@ async def main():
                 screen.blit(a.image, a.rect)
                 
             # 5. Rysowanie HP i postaci
+            DRAW_OFFSET_Y = 110
             player1.draw_hp_bar(screen, 20, 20)
             player2.draw_hp_bar(screen, SCREEN_WIDTH - 20, 20, align_right=True)
-            screen.blit(player1.image, player1.rect)
-            screen.blit(player2.image, player2.rect)
+            img_rect1 = player1.image.get_rect(centerx=player1.rect.centerx, bottom=player1.rect.bottom + DRAW_OFFSET_Y)
+            screen.blit(player1.image, img_rect1)
+            
+            # Gracz 2
+            img_rect2 = player2.image.get_rect(centerx=player2.rect.centerx, bottom=player2.rect.bottom + DRAW_OFFSET_Y)
+            screen.blit(player2.image, img_rect2)
             
             # 6. Ekran wygranej
             if player1.is_dead or player2.is_dead:
@@ -656,6 +889,25 @@ async def main():
                 sub = font_sub.render("Naciśnij ENTER aby wrócić do menu", True, (200, 200, 200))
                 screen.blit(sub, (SCREEN_WIDTH//2 - sub.get_width()//2, 280))
 
+            # --- LOGIKA MIKSTUREK ---
+            # 1. Spawn (co ok. 10 sekund przy 60 FPS)
+            potion_spawn_timer += 1
+            if potion_spawn_timer > 600:
+                potions.append(HealthPotion())
+                potion_spawn_timer = 0
+
+            # 2. Aktualizacja i rysowanie
+            for pot in potions[:]:
+                # Wywołujemy update z klasy HealthPotion (którą wkleiłeś wcześniej)
+                # Musisz upewnić się, że klasa HealthPotion jest zdefiniowana nad main()
+                consumed = pot.update(platforms, [player1, player2])
+                
+                if consumed:
+                    potions.remove(pot)
+                else:
+                    screen.blit(pot.image, pot.rect)
+            # -------------------------
+            
         pygame.display.flip()
         clock.tick(60)
         await asyncio.sleep(0)
