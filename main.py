@@ -34,7 +34,7 @@ is_binding = False        # Czy czekamy na wciśnięcie klawisza
 menu_options = ["Jeden Gracz", "Dwóch Graczy", "USTAWIENIA"]
 menu_index = 0
 game_mode = "multi"
-available_chars = ["Soldier", "Orc", "Knight"]
+available_chars = ["Soldier", "Orc", "Knight", "Golem"]
 p1_char_index = 0
 p2_char_index = 1
 # Sterowanie
@@ -130,6 +130,7 @@ class Arrow(pygame.sprite.Sprite):
         self.image = pygame.Surface((20, 4))
         self.image.fill((200, 200, 200))
         self.rect = self.image.get_rect()
+        self.rect.centery = y + 20
         if direction == 'right':
             self.rect.left = x
             self.vel = self.speed
@@ -462,13 +463,74 @@ class HealthPotion(pygame.sprite.Sprite):
                 p.current_hp = min(p.max_hp, p.current_hp + self.heal_amount)
                 return True # Miksturka do usunięcia
         return False
+class Golem(Character):
+    def __init__(self, x, y):
+        # Ścieżka do folderu z Golemem
+        folder_path = "Assets/Golem"
+        super().__init__(x, y, folder_path, scale=2.8) # Golem może być nieco większy
+        self.image_offset_y = 0  # Golem jest duży i wypełnia klatkę
+        # Wymiary klatki Golema: 90x64
+        W, H = 90, 64
+         
+
+        self.animations = {
+            'idle':    self.load_sheet('Golem_1_idle.png', 8, W, H),
+            'walk':    self.load_sheet('Golem_1_walk.png', 10, W, H),
+            'attack1': self.load_sheet('Golem_1_attack.png', 11, W, H),
+            'attack2': self.load_sheet('Golem_1_attack.png', 11, W, H), # Używamy tego samego ataku
+            'hit':     self.load_sheet('Golem_1_hurt.png', 4, W, H),
+            'death':   self.load_sheet('Golem_1_die.png', 11, W, H),
+            # Golem nie ma skoku/bloku w Twoim zestawie, używamy IDLE żeby uniknąć błędów
+            'jump':    self.load_sheet('Golem_1_idle.png', 8, W, H),
+        }
+
+    def update(self, target, arrows_list, controls):
+        if self.is_dead: 
+            self.update_animation()
+            return
+
+        keys = pygame.key.get_pressed()
+
+        if not self.is_attacking and self.state != 'hit':
+            # Ruch
+            if keys[controls['left']]: 
+                self.rect.x -= (self.vel * 0.8) # Golem jest nieco wolniejszy
+                self.direction = 'left'
+                if not self.is_jumping: self.state = 'walk'
+            elif keys[controls['right']]: 
+                self.rect.x += (self.vel * 0.8)
+                self.direction = 'right'
+                if not self.is_jumping: self.state = 'walk'
+            else:
+                if not self.is_jumping: self.state = 'idle'
+            
+            # Skok
+            if keys[controls['jump']] and not self.is_jumping:
+                self.vel_y = self.jump_height
+                self.is_jumping = True
+                self.state = 'jump'
+                self.frame_index = 0
+            
+            # Atak
+            if keys[controls['atk1']] or keys[controls['atk2']]: 
+                self.state = 'attack1'
+                self.is_attacking = True
+                self.frame_index = 0
+
+        self.apply_gravity(platforms)
+        self.update_hitbox()
+        self.check_attack_collision(target)
+        
+        if self.hit_cooldown > 0: self.hit_cooldown -= 1
+        self.update_animation()
+
 
 class HumanSoldier(Character):
     def __init__(self, x, y):
         # Ścieżka do Twoich nowych plików 96x96
         folder_path = "Assets/Human_Soldier_Sword_Shield"
         super().__init__(x, y, folder_path, scale=2.5)
-        
+        self.image_offset_y = 100 # Przykładowa wartość - zwiększaj, jeśli nadal lewituje
         # Wymiary klatki to 96x96
         W, H = 96, 96
         
@@ -544,7 +606,7 @@ class Soldier(Character):
             'death': self.load_sheet('Soldier_Death.png', 4, 100, 100),
         }
         self.arrow_shot = False
-
+        self.image_offset_y = 110
     def update(self, target, arrows_list, controls):
         # 1. Jeśli martwy - tylko animacja i koniec
         if self.is_dead: 
@@ -585,7 +647,7 @@ class Soldier(Character):
         # 3. Mechanika strzału (musi być poza sterowaniem)
         if self.state == 'bow' and int(self.frame_index) == 6 and not self.arrow_shot:
             sp_x = self.hitbox.right if self.direction == 'right' else self.hitbox.left
-            arrows_list.append(Arrow(sp_x, self.hitbox.centery, self.direction, self)) 
+            arrows_list.append(Arrow(sp_x, self.hitbox.centery +25, self.direction, self)) 
             self.arrow_shot = True
 
         # 4. Fizyka i Hitboxy (zawsze aktywne)
@@ -602,6 +664,7 @@ class Soldier(Character):
 class Orc(Character):
     def __init__(self, x, y):
         super().__init__(x, y, "Assets/Orc")
+        self.image_offset_y = 110
         self.animations = {
             'idle': self.load_sheet('Orc_Idle.png', 6, 100, 100),
             'walk': self.load_sheet('Orc_Walk.png', 8, 100, 100),
@@ -687,15 +750,15 @@ async def main():
         ("P2", "Atak 1", "atk1"), ("P2", "Atak 2", "atk2"), ("P2", "Specjalny", "special"), ("P2", "Blok", "block")
     ]
     
-    # Previews
-    p1_pre_soldier = Soldier(200, 150); p1_pre_orc = Orc(200, 150); p1_pre_knight = HumanSoldier(200, 150)
-    p2_pre_soldier = Soldier(650, 150); p2_pre_orc = Orc(650, 150); p2_pre_knight = HumanSoldier(650, 150)
+    # Previews dla Menu Wyboru
+    p1_pre_soldier = Soldier(200, 150); p1_pre_orc = Orc(200, 150); p1_pre_knight = HumanSoldier(200, 150); p1_pre_golem = Golem(200, 150)
+    p2_pre_soldier = Soldier(650, 150); p2_pre_orc = Orc(650, 150); p2_pre_knight = HumanSoldier(650, 150); p2_pre_golem = Golem(650, 150)
     
-    p1_pre_soldier.direction = 'right'; p1_pre_orc.direction = 'right'
-    p2_pre_soldier.direction = 'left'; p2_pre_orc.direction = 'left'
-    p2_pre_knight.direction = 'left'; p1_pre_knight.direction = 'right'
-    arrows = []
+    # Kierunki dla podglądu
+    for p in [p1_pre_soldier, p1_pre_orc, p1_pre_knight, p1_pre_golem]: p.direction = 'right'
+    for p in [p2_pre_soldier, p2_pre_orc, p2_pre_knight, p2_pre_golem]: p.direction = 'left'
 
+    arrows = []
     potions = []
     potion_spawn_timer = 0
 
@@ -748,10 +811,10 @@ async def main():
                         game_state = STATE_MENU
                         
                     # Zmień % 2 na % 3
-                    if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 3
-                    if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 3
-                    if event.key == pygame.K_LEFT: p2_char_index = (p2_char_index - 1) % 3
-                    if event.key == pygame.K_RIGHT: p2_char_index = (p2_char_index + 1) % 3
+                    if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 4
+                    if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 4
+                    if event.key == pygame.K_LEFT: p2_char_index = (p2_char_index - 1) % 4
+                    if event.key == pygame.K_RIGHT: p2_char_index = (p2_char_index + 1) % 4
                                         
                     if event.key == pygame.K_RETURN:
                         # Funkcja pomocnicza do tworzenia wybranej klasy
@@ -759,6 +822,7 @@ async def main():
                             if name == "Soldier": return Soldier(x, y)
                             if name == "Orc": return Orc(x, y)
                             if name == "Knight": return HumanSoldier(x, y)
+                            if name == "Golem": return Golem(x, y)
                             return Soldier(x, y)
                     
                         player1 = spawn(available_chars[p1_char_index], 100, 250)
@@ -784,9 +848,9 @@ async def main():
                         game_state = STATE_MENU
                     if (player1.is_dead or player2.is_dead) and event.key == pygame.K_RETURN:
                         game_state = STATE_MENU
+                    
 
-
-
+ 
 
         # --- RENDEROWANIE ---
         if game_state == STATE_MENU:
@@ -799,23 +863,29 @@ async def main():
             label = font_sub.render("Wybór: [A/D] P1, [Strzałki] P2, [ENTER] Start", True, (255, 255, 255))
             screen.blit(label, (SCREEN_WIDTH // 2 - label.get_width()//2, 50))
             
+            # --- POPRAWIONA LOGIKA WYBORU PODGLĄDU ---
             # --- LOGIKA WYBORU PODGLĄDU ---
-            # Gracz 1
-            if p1_char_index == 0: p1_v = p1_pre_soldier
-            elif p1_char_index == 1: p1_v = p1_pre_orc
-            else: p1_v = p1_pre_knight
+            def get_preview(idx, p_list):
+                return p_list[idx]
             
-            # Gracz 2
-            if p2_char_index == 0: p2_v = p2_pre_soldier
-            elif p2_char_index == 1: p2_v = p2_pre_orc
-            else: p2_v = p2_pre_knight
-            # ------------------------------
-         
-            p1_v.update_animation(); p2_v.update_animation()
+            p1_v = get_preview(p1_char_index, [p1_pre_soldier, p1_pre_orc, p1_pre_knight, p1_pre_golem])
+            p2_v = get_preview(p2_char_index, [p2_pre_soldier, p2_pre_orc, p2_pre_knight, p2_pre_golem])
             
-            screen.blit(p1_v.image, (200, 150))
-            screen.blit(p2_v.image, (650, 150))
+            p1_v.update_animation()
+            p2_v.update_animation()
             
+            # --- DYNAMICZNE DOPASOWANIE WYSOKOŚCI ---
+            # Jeśli postać to Golem (index 3), zostawiamy 330. Dla reszty obniżamy postać (np. do 380).
+            # Wartość 380 możesz dostosować (zwiększyć), aż postacie dotkną ziemi.
+            y_pos_p1 = 330 if p1_char_index == 3 else 420
+            y_pos_p2 = 330 if p2_char_index == 3 else 420
+            
+            p1_rect = p1_v.image.get_rect(midbottom=(250, y_pos_p1))
+            p2_rect = p2_v.image.get_rect(midbottom=(750, y_pos_p2))
+            
+            screen.blit(p1_v.image, p1_rect)
+            screen.blit(p2_v.image, p2_rect)
+                        
             p1_name = font_sub.render(f"P1: {available_chars[p1_char_index]}", True, (100, 100, 255))
             p2_name = font_sub.render(f"P2: {available_chars[p2_char_index]}", True, (255, 100, 100))
             screen.blit(p1_name, (220, 350)); screen.blit(p2_name, (670, 350))
@@ -842,75 +912,53 @@ async def main():
             screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))
 
         elif game_state == STATE_PLAYING:
-            # Map
+            # 1. Rysowanie mapy (tło)
             for row_idx, row in enumerate(game_map):
                 for col_idx, tile_idx in enumerate(row):
-                    # Rysujemy tylko jeśli to nie jest "puste" (np. 43 to u Ciebie tło)
-                    # Jeśli kafelek 43 to po prostu przeźroczysty PNG, to warunek if jest zbędny
                     if tile_idx < len(tiles):
                         screen.blit(tiles[tile_idx], (col_idx * TILE_SIZE, row_idx * TILE_SIZE))
-         # 1. Logika orientacji (patrzenie na siebie)
+
+            # 2. Aktualizacja orientacji i logiki
             player1.face_target(player2)
             player2.face_target(player1)
-            
-            # 2. Aktualizacja Gracza 1 (zawsze klawiatura)
             player1.update(player2, arrows, P1_CONTROLS)
             
-            # 3. Aktualizacja Gracza 2 (CPU lub Klawiatura)
             if game_mode == "single":
                 player2.update_cpu(player1, arrows)
             else:
                 player2.update(player1, arrows, P2_CONTROLS)
-            
-            # 4. Pozostała logika (pociski, granice ekranu)
-            player1.screen_wrap()
-            player2.screen_wrap()
-            
+
+            # 3. JEDYNE RYSOWANIE POSTACI (z offsetem)
+            for p in [player1, player2]:
+                if p:
+                    # To wyrównuje stopy postaci do podłogi (hitboxa)
+                    # Upewnij się, że każda klasa ma zdefiniowane self.image_offset_y w __init__
+                    off_y = getattr(p, 'image_offset_y', 0)
+                    img_rect = p.image.get_rect(midbottom=(p.rect.centerx, p.rect.bottom + off_y))
+                    screen.blit(p.image, img_rect)
+
+            # 4. Mikstury i pociski
+            for pot in potions[:]:
+                consumed = pot.update(platforms, [player1, player2])
+                if consumed: potions.remove(pot)
+                else: screen.blit(pot.image, pot.rect)
+
             for a in arrows[:]:
                 a.update(player1, player2, arrows)
                 screen.blit(a.image, a.rect)
-                
-            # 5. Rysowanie HP i postaci
-            DRAW_OFFSET_Y = 110
+
+            # 5. Interfejs (HP i napisy)
             player1.draw_hp_bar(screen, 20, 20)
             player2.draw_hp_bar(screen, SCREEN_WIDTH - 20, 20, align_right=True)
-            img_rect1 = player1.image.get_rect(centerx=player1.rect.centerx, bottom=player1.rect.bottom + DRAW_OFFSET_Y)
-            screen.blit(player1.image, img_rect1)
-            
-            # Gracz 2
-            img_rect2 = player2.image.get_rect(centerx=player2.rect.centerx, bottom=player2.rect.bottom + DRAW_OFFSET_Y)
-            screen.blit(player2.image, img_rect2)
-            
-            # 6. Ekran wygranej
+
             if player1.is_dead or player2.is_dead:
                 win_text = "PLAYER 1 Wygrał!" if player2.is_dead else "PLAYER 2 Wygrał!"
                 txt = font_main.render(win_text, True, (255, 255, 255))
-                screen.blit(txt, (SCREEN_WIDTH//2 - txt.get_width()//2, 200))
-                sub = font_sub.render("Naciśnij ENTER aby wrócić do menu", True, (200, 200, 200))
-                screen.blit(sub, (SCREEN_WIDTH//2 - sub.get_width()//2, 280))
-
-            # --- LOGIKA MIKSTUREK ---
-            # 1. Spawn (co ok. 10 sekund przy 60 FPS)
-            potion_spawn_timer += 1
-            if potion_spawn_timer > 600:
-                potions.append(HealthPotion())
-                potion_spawn_timer = 0
-
-            # 2. Aktualizacja i rysowanie
-            for pot in potions[:]:
-                # Wywołujemy update z klasy HealthPotion (którą wkleiłeś wcześniej)
-                # Musisz upewnić się, że klasa HealthPotion jest zdefiniowana nad main()
-                consumed = pot.update(platforms, [player1, player2])
-                
-                if consumed:
-                    potions.remove(pot)
-                else:
-                    screen.blit(pot.image, pot.rect)
-            # -------------------------
-            
+                screen.blit(txt, (SCREEN_WIDTH//2 - txt.get_width()//2, 200)) 
+                        # -------------------------
+                        
         pygame.display.flip()
         clock.tick(60)
         await asyncio.sleep(0)
-
 # Start
 asyncio.run(main())
