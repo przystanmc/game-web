@@ -10,13 +10,13 @@ def get_path(relative_path):
 player1 = None
 player2 = None
 current_bg_img = None
-
+cpu_enemies = []  # Lista na przeciwników w trybie Single
+current_map_index = 0 # Indeks aktualnego pokoju w Single Player
 
 pygame.init()
 SCREEN_WIDTH = 1000
 SCREEN_HEIGHT = 500
 screen = pygame.display.set_mode((1000, 500))
-
 clock = pygame.time.Clock()
 
 pygame.font.init()
@@ -136,25 +136,60 @@ available_maps = [
         "data": map_arena, 
         "bg_path": "Assets/Backgrounds/sky.png"
     }
+] 
+B = 'B'   
+single_levels = [
+    {
+        "name": "Poziom 1: Przedpole",
+        "data": [
+            [B]*23, [B]*23,
+            [B]*5 + ['O'] + [B]*10 + ['O'] + [B]*6, # Dwóch orków na start
+            [B]*23, [B]*23, [B]*23, [B]*23, [B]*23, [B]*23,
+            [2]*23,
+        ],
+        "bg_path": "Assets/Backgrounds/forest.png"
+    },
+    {
+        "name": "Poziom 2: Strażnik",
+        "data": [
+            [B]*23, [B]*23,
+            [13, 2, 15] + [B]*17 + [13, 2, 15],
+            [B]*23, [B]*11 + ['G'] + [B]*11, # Golem na środku
+            [B]*23, [B]*23, [B]*23, [B]*23,
+            [2]*23,
+        ],
+        "bg_path": "Assets/Backgrounds/sky.png"
+    }
 ]
 # Funkcja budująca kolizje (wywołuj przy starcie walki)
 platforms = []
 def build_platforms(map_data):
-    global game_map, platforms
+    global game_map, platforms, cpu_enemies
     game_map = map_data
     platforms.clear()
+    cpu_enemies.clear() # Ważne: czyścimy wrogów przy zmianie mapy
+
     for row_idx, row in enumerate(map_data):
         for col_idx, tile_idx in enumerate(row):
-            # Bezpieczne sprawdzenie: czy tile_idx nie jest tłem 'B' i czy jest na liście kolizji
-            if tile_idx != 'B':
+            pixel_x = col_idx * TILE_SIZE
+            pixel_y = row_idx * TILE_SIZE
+            
+            # 1. Obsługa kafelków (Liczby)
+            if isinstance(tile_idx, int):
                 if tile_idx in COLLISION_TILES:
-                    new_rect = pygame.Rect(
-                        col_idx * TILE_SIZE, 
-                        row_idx * TILE_SIZE, 
-                        TILE_SIZE, 
-                        TILE_SIZE
-                    )
+                    new_rect = pygame.Rect(pixel_x, pixel_y, TILE_SIZE, TILE_SIZE)
                     platforms.append(new_rect)
+            
+            # 2. Obsługa przeciwników w trybie Single (Litery)
+            elif game_mode == "single":
+                if tile_idx == 'O':
+                    # Upewnij się, że klasa Orc jest zdefiniowana!
+                    cpu_enemies.append(Orc(pixel_x, pixel_y)) 
+                elif tile_idx == 'G':
+                    cpu_enemies.append(Golem(pixel_x, pixel_y))
+                elif tile_idx == 'K':
+                    cpu_enemies.append(HumanSoldier(pixel_x, pixel_y))
+                          
 # --- POPRAWKA W RYSOWANIU (wewnątrz pętli gry) ---
 # Zamień fragment rysowania postaci na ten poniżej, żeby stały NA klockach:
 # img_rect = player.image.get_rect(centerx=player.rect.centerx, bottom=player.rect.bottom)
@@ -325,27 +360,51 @@ class Character(pygame.sprite.Sprite):
                         self.rect.bottom = platform.top
                         self.vel_y = 0
                         self.is_jumping = False
-    
+        if game_mode == "single" and self == player1:
+            # Lewa krawędź zawsze blokuje
+            if self.rect.left < 0: self.rect.left = 0
+            
+            # Prawa krawędź blokuje, jeśli żyją wrogowie
+            enemies_alive = any(not e.is_dead for e in cpu_enemies)
+            if enemies_alive:
+                if self.rect.right > SCREEN_WIDTH: self.rect.right = SCREEN_WIDTH
+            # Jeśli nie ma wrogów, pozwalamy wyjść poza SCREEN_WIDTH (logika przejścia w main)
+
+
     def check_attack_collision(self, target):
-        # Sprawdzamy stan ataku i czy klatka jest w fazie zamachu (np. od 3 do 5, by być pewnym trafienia)
-        if self.is_attacking and self.state in ['attack1', 'attack2'] and 3 <= int(self.frame_index) <= 5:
-            # Twoje sprawdzone wymiary
-            attack_rect = pygame.Rect(0, 0, 25, 50)
+        # 1. Sprawdzamy stan i klatkę (zwiększyłem zakres klatek dla pewności)
+        if self.is_attacking and self.state in ['attack1', 'attack2'] and 2 <= int(self.frame_index) <= 5:
+            
+            # 2. Tworzymy obszar ataku (powiększyłem go nieco do 40x60)
+            attack_rect = pygame.Rect(0, 0, 40, 60)
             
             if self.direction == 'right':
                 attack_rect.left = self.hitbox.right
             else:
                 attack_rect.right = self.hitbox.left
-                
+            
             attack_rect.centery = self.hitbox.centery
-            
 
-            
-            # Logika obrażeń
-            if attack_rect.colliderect(target.hitbox) and target.hit_cooldown == 0:
-                target.take_damage(10)
-                # hit_cooldown na 30 klatek przy 30 FPS to 1 sekunda ochrony
-                target.hit_cooldown = 25
+            # --- LINIA DEBUGOWANIA (opcjonalna) ---
+            # Odkomentuj poniższą linię, aby widzieć gdzie uderzasz (czerwony kwadrat)
+            # pygame.draw.rect(screen, (255, 0, 0), attack_rect, 2)
+
+            # 3. Obsługa listy (CPU) i pojedynczego celu (PVP)
+            targets_to_check = target if isinstance(target, list) else [target]
+
+            for t in targets_to_check:
+                # Sprawdzamy czy cel istnieje, nie jest None i nie jest martwy
+                if t and t != self and not t.is_dead:
+                    # Pobieramy hitbox celu (obsługa różnych nazw atrybutów)
+                    target_box = getattr(t, 'hitbox', t.rect)
+                    
+                    if attack_rect.colliderect(target_box):
+                        if t.hit_cooldown == 0:
+                            # ZADAWANIE OBRAŻEŃ
+                            t.take_damage(10)
+                            t.hit_cooldown = 20
+                            # Możesz dodać print, żeby widzieć w konsoli czy trafia:
+                            # print(f"Trafiono: {t}")
 
     def screen_wrap(self):
         if self.rect.centerx > SCREEN_WIDTH: self.rect.centerx = 0
@@ -842,18 +901,15 @@ async def main():
 
                 # 3. WYBÓR POSTACI (DODANY ESC)
                 elif game_state == STATE_CHAR_SELECT:
-                    # To sprawia, że ESC wraca do menu
                     if event.key == pygame.K_ESCAPE:
                         game_state = STATE_MENU
                         
-                    # Zmień % 2 na % 3
                     if event.key == pygame.K_a: p1_char_index = (p1_char_index - 1) % 4
                     if event.key == pygame.K_d: p1_char_index = (p1_char_index + 1) % 4
                     if event.key == pygame.K_LEFT: p2_char_index = (p2_char_index - 1) % 4
                     if event.key == pygame.K_RIGHT: p2_char_index = (p2_char_index + 1) % 4
                                         
                     if event.key == pygame.K_RETURN:
-                        # Funkcja pomocnicza do tworzenia wybranej klasy
                         def spawn(name, x, y):
                             if name == "Soldier": return Soldier(x, y)
                             if name == "Orc": return Orc(x, y)
@@ -863,56 +919,57 @@ async def main():
                     
                         player1 = spawn(available_chars[p1_char_index], 100, 250)
                         player2 = spawn(available_chars[p2_char_index], 700, 250)
-                        player2.direction = 'left'          
-                        player1.direction = 'right'
-                        game_state = STATE_MAP_SELECT
+                        player2.direction = 'left'; player1.direction = 'right'
                         
-                # 4. WYBÓR MAPY 
-                elif game_state == STATE_MAP_SELECT:
-                    if event.key == pygame.K_ESCAPE:
-                        game_state = STATE_CHAR_SELECT
-                    if event.key in [pygame.K_LEFT, pygame.K_a]:
-                        selected_map_index = (selected_map_index - 1) % len(available_maps)
-                    if event.key in [pygame.K_RIGHT, pygame.K_d]:
-                        selected_map_index = (selected_map_index + 1) % len(available_maps)
-                    
-                    if event.key == pygame.K_RETURN:
-                        # Pobieramy pełne info o mapie
-                        map_info = available_maps[selected_map_index]
-                        map_data = map_info["data"]
-                        
-                        build_platforms(map_data) 
-                        
-                        # Ładowanie tła
-                        try:
-                            bg_path = get_path(map_info["bg_path"])
-                            raw_bg = pygame.image.load(bg_path).convert()
-                            current_bg_img = pygame.transform.scale(raw_bg, (SCREEN_WIDTH, SCREEN_HEIGHT))
-                        except Exception as e:
-                            print(f"Błąd tła: {e}")
-                            current_bg_img = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
-                            current_bg_img.fill((30, 30, 30))
+                        if game_mode == "single":
+                            # LOSOWANIE MAPY NA START SINGLE
+                            current_level = random.choice(single_levels)
+                            build_platforms(current_level["data"])
+                            try:
+                                bg_img = pygame.image.load(get_path(current_level["bg_path"])).convert()
+                                current_bg_img = pygame.transform.scale(bg_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
+                            except: current_bg_img = None
+                            arrows = []; potions = []
+                            game_state = STATE_PLAYING
+                        else:
+                            game_state = STATE_MAP_SELECT
 
-                        # Resetowanie obiektów gry
-                        arrows = []
-                        potions = []
+                # 4. WYBÓR MAPY (Tylko Multi)
+                elif game_state == STATE_MAP_SELECT:
+                    if event.key == pygame.K_ESCAPE: game_state = STATE_CHAR_SELECT
+                    maps_to_show = available_maps
+                    if event.key in [pygame.K_LEFT, pygame.K_a]: selected_map_index = (selected_map_index - 1) % len(maps_to_show)
+                    if event.key in [pygame.K_RIGHT, pygame.K_d]: selected_map_index = (selected_map_index + 1) % len(maps_to_show)
+                    if event.key == pygame.K_RETURN:
+                        map_info = maps_to_show[selected_map_index]
+                        build_platforms(map_info["data"])
+                        try:
+                            raw_bg = pygame.image.load(get_path(map_info["bg_path"])).convert()
+                            current_bg_img = pygame.transform.scale(raw_bg, (SCREEN_WIDTH, SCREEN_HEIGHT))
+                        except: current_bg_img = None
                         player1.rect.x, player1.rect.y = 100, 250
                         player2.rect.x, player2.rect.y = 700, 250
-                        player1.hp = player1.max_hp
-                        player2.hp = player2.max_hp
-                        player1.is_dead = False
-                        player2.is_dead = False
+                        arrows = []; potions = []; game_state = STATE_PLAYING
 
-                        game_state = STATE_PLAYING
-
-                # 4. POWRÓT Z WALKI (DODANY ESC)
+                # 5. LOGIKA W TRAKCIE GRY (KLIKANIE ENTER)
                 elif game_state == STATE_PLAYING:
-                    if event.key == pygame.K_ESCAPE:
-                        game_state = STATE_MENU
-                    if (player1.is_dead or player2.is_dead) and event.key == pygame.K_RETURN:
-                        game_state = STATE_MENU
+                    if event.key == pygame.K_ESCAPE: game_state = STATE_MENU
                     
-
+                    # Restart po śmierci lub NOWY POZIOM w Single
+                    if event.key == pygame.K_RETURN:
+                        if player1.is_dead or (game_mode == "multi" and player2.is_dead):
+                            game_state = STATE_MENU
+                        elif game_mode == "single" and len(cpu_enemies) == 0:
+                            # --- ŁADOWANIE KOLEJNEJ LOSOWEJ MAPY ---
+                            next_level = random.choice(single_levels)
+                            build_platforms(next_level["data"])
+                            try:
+                                bg_img = pygame.image.load(get_path(next_level["bg_path"])).convert()
+                                current_bg_img = pygame.transform.scale(bg_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
+                            except: pass
+                            player1.rect.x, player1.rect.y = 100, 250
+                            player1.current_hp = min(player1.current_hp + 30, player1.max_hp) # Bonus HP
+                            arrows.clear(); potions.clear()
  
 
         # --- RENDEROWANIE ---
@@ -995,81 +1052,103 @@ async def main():
             screen.blit(hint, (SCREEN_WIDTH//2 - hint.get_width()//2, 460))
 
         elif game_state == STATE_PLAYING:
-            
-            # 1. Rysowanie tła (duży obrazek)
-            if current_bg_img:
-                screen.blit(current_bg_img, (0, 0))
-            else:
-                screen.fill((30, 30, 30))
-
-            # 2. Rysowanie kafelków (pomiń 'B')
+            # 1. TŁO I ARENA
+            if current_bg_img: screen.blit(current_bg_img, (0, 0))
             for row_idx, row in enumerate(game_map):
                 for col_idx, tile_idx in enumerate(row):
-                    if tile_idx != 'B': # Ignoruj przezroczyste tło
-                        if isinstance(tile_idx, int) and tile_idx < len(tiles):
-                            screen.blit(tiles[tile_idx], (col_idx * TILE_SIZE, row_idx * TILE_SIZE))
+                    if tile_idx != 'B' and isinstance(tile_idx, int):
+                        screen.blit(tiles[tile_idx], (col_idx * TILE_SIZE, row_idx * TILE_SIZE))
 
-            # 2. Aktualizacja orientacji i logiki
-            player1.face_target(player2)
-            player2.face_target(player1)
-            player1.update(player2, arrows, P1_CONTROLS)
+            # --- LOGIKA POSTACI ---
 
-            if game_mode == "single":
-                player2.update_cpu(player1, arrows)
-            else:
+            # 2. AKTUALIZACJA POSTACI
+            if game_mode == "multi":
+                all_characters = [player1, player2]
+                player1.update(player2, arrows, P1_CONTROLS)
                 player2.update(player1, arrows, P2_CONTROLS)
-            # --- LOGIKA TELEPORTACJI (Zanim postać wyjdzie za ekran) ---
-            margin = 2  # Jak blisko krawędzi musi być postać, żeby ją przeteleportowało
-            offset = 5  # Na jaką głębokość z drugiej strony ma wskoczyć (żeby nie zapętlić teleportacji)
+            else:
+                # SINGLE PLAYER
+                all_characters = [player1] + cpu_enemies
+                player1.update(cpu_enemies, arrows, P1_CONTROLS)
+                for enemy in cpu_enemies[:]:
+                    enemy.update_cpu(player1, arrows)
+                    # Sprawdzanie czy wróg ostatecznie zniknął (po animacji śmierci)
+                    if enemy.is_dead and int(enemy.frame_index) >= len(enemy.animations['death']) - 1:
+                        cpu_enemies.remove(enemy)
 
-            for p in [player1, player2]:
-                if p:
-                    # 1. Teleportacja z PRAWEJ na LEWĄ
-                    # Jeśli prawa krawędź postaci jest 10px przed końcem ekranu
-                    if p.rect.right > SCREEN_WIDTH - margin:
-                        p.rect.x = offset 
+                # --- MECHANIZM RANDOMOWEJ MAPY PO POKONANIU WROGÓW ---
+                if len(cpu_enemies) == 0 and not player1.is_dead:
+                    # Wybieramy nową mapę (inną niż obecna, jeśli masz ich więcej)
+                    next_level = random.choice(single_levels)
+                    build_platforms(next_level["data"])
                     
-                    # 2. Teleportacja z LEWEJ na PRAWĄ
-                    # Jeśli lewa krawędź postaci jest 10px od początku ekranu
+                    # Ładujemy nowe tło
+                    try:
+                        bg_img = pygame.image.load(get_path(next_level["bg_path"])).convert()
+                        current_bg_img = pygame.transform.scale(bg_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
+                    except: pass
+                    
+                    # Resetujemy pozycję gracza na start nowej mapy
+                    player1.rect.x, player1.rect.y = 100, 250
+                    # Opcjonalnie: ulecz gracza o 20 HP za wygraną
+                    player1.current_hp = min(player1.current_hp + 20, player1.max_hp)
+            # --- TELEPORTACJA I RENDEROWANIE ---
+            margin = 2
+            offset = 10
+            
+            for p in all_characters:
+                if p:
+                    # Logika teleportacji (Wrap-around)
+                    if p.rect.right > SCREEN_WIDTH - margin:
+                        p.rect.x = offset
                     elif p.rect.left < margin:
                         p.rect.x = SCREEN_WIDTH - p.rect.width - offset
-            # 3. JEDYNE RYSOWANIE POSTACI (z offsetem)
-            for p in [player1, player2]:
-                if p:
-                    # To wyrównuje stopy postaci do podłogi (hitboxa)
-                    # Upewnij się, że każda klasa ma zdefiniowane self.image_offset_y w __init__
+                    
+                    # Rysowanie postaci z uwzględnieniem offsetu stóp
                     off_y = getattr(p, 'image_offset_y', 0)
                     img_rect = p.image.get_rect(midbottom=(p.rect.centerx, p.rect.bottom + off_y))
                     screen.blit(p.image, img_rect)
-                    # Jeśli wyjdzie za prawą krawędź
 
+            # --- POCISKI I POTKI ---
             for pot in potions[:]:
-                hit = pot.update(platforms, [player1, player2])
-                if hit:
-                    if pot in potions: potions.remove(pot)
-                else:
-                    screen.blit(pot.image, pot.rect)
+                if pot.update(platforms, all_characters): potions.remove(pot)
+                else: screen.blit(pot.image, pot.rect)
 
-            # LICZNIK SPAWNU - musi być tutaj, poza pętlą 'for pot in potions'!
+            for a in arrows[:]:
+                # W single player strzały sprawdzają kolizję z listą wrogów
+                targets = [player2] if game_mode == "multi" else cpu_enemies
+                a.update(player1, targets, arrows)
+                screen.blit(a.image, a.rect)
+
+            # --- INTERFEJS (HUD) ---
+            player1.draw_hp_bar(screen, 20, 20)
+            
+            if game_mode == "multi":
+                player2.draw_hp_bar(screen, SCREEN_WIDTH - 20, 20, align_right=True)
+                if player1.is_dead or player2.is_dead:
+                    msg = "PLAYER 1 WYGRAŁ!" if player2.is_dead else "PLAYER 2 WYGRAŁ!"
+                    txt = font_main.render(msg, True, (255, 255, 255))
+                    screen.blit(txt, (SCREEN_WIDTH//2 - txt.get_width()//2, 200))
+            else:
+                # Nagłówki Single Player
+                enemies_left = len(cpu_enemies)
+                count_txt = font_sub.render(f"Przeciwnicy: {enemies_left}", True, (255, 100, 100))
+                screen.blit(count_txt, (SCREEN_WIDTH - 150, 20))
+                
+                if enemies_left == 0:
+                    win_txt = font_main.render("POZIOM UKOŃCZONY!", True, (0, 255, 0))
+                    screen.blit(win_txt, (SCREEN_WIDTH//2 - win_txt.get_width()//2, 200))
+                    hint_txt = font_sub.render("Naciśnij ENTER aby kontynuować", True, (200, 200, 200))
+                    screen.blit(hint_txt, (SCREEN_WIDTH//2 - hint_txt.get_width()//2, 280))
+                elif player1.is_dead:
+                    lose_txt = font_main.render("ZGINĄŁEŚ!", True, (255, 0, 0))
+                    screen.blit(lose_txt, (SCREEN_WIDTH//2 - lose_txt.get_width()//2, 200))
+
+            # Spawn potyczek
             potion_spawn_timer += 1
             if potion_spawn_timer >= POTION_SPAWN_COOLDOWN:
-                px = random.randint(100, SCREEN_WIDTH - 100)
-                potions.append(HealthPotion(px, -50))
+                potions.append(HealthPotion(random.randint(100, SCREEN_WIDTH-100), -50))
                 potion_spawn_timer = 0
-                
-            for a in arrows[:]:
-                a.update(player1, player2, arrows)
-                screen.blit(a.image, a.rect)
-            # 5. Interfejs (HP i napisy)
-            player1.draw_hp_bar(screen, 20, 20)
-            player2.draw_hp_bar(screen, SCREEN_WIDTH - 20, 20, align_right=True)
-
-            if player1.is_dead or player2.is_dead:
-                win_text = "PLAYER 1 Wygrał!" if player2.is_dead else "PLAYER 2 Wygrał!"
-                txt = font_main.render(win_text, True, (255, 255, 255))
-                screen.blit(txt, (SCREEN_WIDTH//2 - txt.get_width()//2, 200)) 
-                        # -------------------------
-                        
         pygame.display.flip()
         clock.tick(50)
         await asyncio.sleep(0)
